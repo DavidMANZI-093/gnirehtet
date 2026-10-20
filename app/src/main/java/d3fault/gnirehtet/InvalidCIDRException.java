@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2018 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,27 +15,27 @@
  * limitations under the License.
  */
 
-package com.genymobile.gnirehtet;
+package d3fault.gnirehtet;
 
+@SuppressWarnings("serial")
 public class InvalidCIDRException extends Exception {
+  private String cidr;
 
-    private String cidr;
+  private static String createMessage(String cidr) {
+    return "Invalid CIDR: " + cidr;
+  }
 
-    private static String createMessage(String cidr) {
-        return "Invalid CIDR:" + cidr;
-    }
+  public InvalidCIDRException(String cidr, Throwable cause) {
+    super(createMessage(cidr), cause);
+    this.cidr = cidr;
+  }
 
-    public InvalidCIDRException(String cidr, Throwable cause) {
-        super(createMessage(cidr), cause);
-        this.cidr = cidr;
-    }
+  public InvalidCIDRException(String cidr) {
+    super(createMessage(cidr));
+    this.cidr = cidr;
+  }
 
-    public InvalidCIDRException(String cidr) {
-        super(createMessage(cidr));
-        this.cidr = cidr;
-    }
-
-    public String getCIDR() {
-        return cidr;
-    }
+  public String getCIDR() {
+    return cidr;
+  }
 }

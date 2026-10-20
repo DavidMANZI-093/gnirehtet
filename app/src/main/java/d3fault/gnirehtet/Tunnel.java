@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,18 +15,17 @@
  * limitations under the License.
  */
 
-package com.genymobile.gnirehtet;
+package d3fault.gnirehtet;
 
 import java.io.IOException;
 
 public interface Tunnel {
+  // blocking
+  void send(byte[] packet, int len) throws IOException;
 
-    // blocking
-    void send(byte[] packet, int len) throws IOException;
+  // blocking
+  int receive(byte[] packet) throws IOException;
 
-    // blocking
-    int receive(byte[] packet) throws IOException;
-
-    // blocking
-    void close();
+  // blocking
+  void close();
 }

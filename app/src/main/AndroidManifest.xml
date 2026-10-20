@@ -1,35 +1,39 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools"
-    package="com.genymobile.gnirehtet">
+    package="d3fault.gnirehtet">
 
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.INTERNET" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
     <application
         android:allowBackup="false"
         android:icon="@null"
         android:label="@string/app_name"
         android:supportsRtl="true"
-        android:theme="@style/AppTheme"
-        tools:ignore="GoogleAppIndexingWarning">
+        android:theme="@style/AppTheme">
         <activity
-            android:name="com.genymobile.gnirehtet.GnirehtetActivity"
+            android:name="d3fault.gnirehtet.GnirehtetActivity"
             android:exported="true"
             android:permission="android.permission.WRITE_SECURE_SETTINGS"
             android:theme="@style/Theme.Transparent">
             <intent-filter>
-                <action android:name="com.genymobile.gnirehtet.START" />
-                <action android:name="com.genymobile.gnirehtet.STOP" />
+                <action android:name="d3fault.gnirehtet.START" />
+                <action android:name="d3fault.gnirehtet.STOP" />
             </intent-filter>
         </activity>
 
         <service
-            android:name="com.genymobile.gnirehtet.GnirehtetService"
+            android:name="d3fault.gnirehtet.GnirehtetService"
             android:enabled="true"
             android:exported="true"
+            android:foregroundServiceType="specialUse"
             android:permission="android.permission.BIND_VPN_SERVICE">
+            <property
+                android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Reverse tethering: forwards the device traffic to a relay over adb (VPN)" />
             <intent-filter>
                 <action android:name="android.net.VpnService" />
             </intent-filter>
