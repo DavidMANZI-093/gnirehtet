@@ -3,3 +3,8 @@ build/
 .idea/
 *.iml
 /local.properties
+/local.env
+
+# JDT LS / Eclipse metadata (local, machine-specific)
+/.project
+/.settings/
