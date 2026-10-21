@@ -112,6 +112,7 @@ HAMCREST_JAR := $(TEST_DEPS)/hamcrest-core-1.3.jar
 .PHONY: help all \
 	app app-debug app-release app-install app-uninstall app-tunnel app-start app-stop \
 	app-lint app-test app-gen app-info app-check app-keystore app-clean \
+	app-grant-notifications \
 	relay relay-release relay-test relay-install relay-clean relay-check check \
 	release-keystore release-check
 
@@ -156,16 +157,18 @@ help:
 	@echo "Gnirehtet (Gradle-free build)"
 	@echo
 	@echo "  App (Android):"
-	@echo "  make app           build $(APK_DEBUG)"
-	@echo "  make app-release   build $(APK_RELEASE) (release keystore required)"
-	@echo "  make app-install   adb install -r the debug APK"
-	@echo "  make app-tunnel    adb reverse localabstract:gnirehtet -> tcp:$(PORT)"
-	@echo "  make app-start     send the START intent over adb"
-	@echo "  make app-stop      send the STOP intent over adb"
-	@echo "  make app-lint      compile with javac -Xlint:all and show warnings"
-	@echo "  make app-test      run JUnit tests from $(APP)/src/test/java"
-	@echo "  make app-info      show the debug APK manifest summary"
-	@echo "  make app-clean     remove $(BUILD)/"
+	@echo "  make app                      build $(APK_DEBUG)"
+	@echo "  make app-release              build $(APK_RELEASE) (release keystore required)"
+	@echo "  make app-install              adb install -r the debug APK (+ grant notifications)"
+	@echo "  make app-uninstall            adb uninstall $(PKG)"
+	@echo "  make app-grant-notifications  grant POST_NOTIFICATIONS via adb"
+	@echo "  make app-tunnel               adb reverse localabstract:gnirehtet -> tcp:$(PORT)"
+	@echo "  make app-start                send the START intent over adb"
+	@echo "  make app-stop                 send the STOP intent over adb"
+	@echo "  make app-lint                 compile with javac -Xlint:all and show warnings"
+	@echo "  make app-test                 run JUnit tests from $(APP)/src/test/java"
+	@echo "  make app-info                 show the debug APK manifest summary"
+	@echo "  make app-clean                remove $(BUILD)/"
 	@echo
 	@echo "  Relay (Rust):"
 	@echo "  make relay         cargo build"
@@ -242,6 +245,19 @@ release-check: release-keystore
 
 app-install: app-debug
 	$(ADB) install -r $(APK_DEBUG)
+	$(MAKE) --no-print-directory app-grant-notifications
+
+app-grant-notifications:
+	@api=$$($(ADB) shell getprop ro.build.version.sdk | tr -d '\r'); \
+	case "$$api" in \
+		''|*[!0-9]*) echo "cannot read Android API level (is a device connected?)"; exit 1;; \
+	esac; \
+	if [ "$$api" -ge 33 ]; then \
+		$(ADB) shell pm grant $(PKG) android.permission.POST_NOTIFICATIONS; \
+		$(ADB) shell cmd appops set $(PKG) POST_NOTIFICATION allow; \
+	else \
+		echo "API $$api: POST_NOTIFICATIONS not required"; \
+	fi
 
 app-uninstall:
 	$(ADB) uninstall $(PKG)
@@ -249,7 +265,7 @@ app-uninstall:
 app-tunnel:
 	$(ADB) reverse localabstract:gnirehtet tcp:$(PORT)
 
-app-start:
+app-start: app-grant-notifications
 	$(ADB) shell am start -a $(START_ACTION) -n $(ACTIVITY)
 
 app-stop:
