@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +15,10 @@
  * limitations under the License.
  */
 
-use log::*;
+use crate::logger::{self, LevelFilter};
+use mio::event::Event;
 use mio::net::UdpSocket;
-use mio::{Event, PollOpt, Ready, Token};
+use mio::{Interest, Token};
 use std::cell::RefCell;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -41,7 +43,7 @@ pub struct UdpConnection {
     id: ConnectionId,
     client: Weak<RefCell<Client>>,
     socket: UdpSocket,
-    interests: Ready,
+    interests: Interest,
     token: Token,
     client_to_network: DatagramBuffer,
     network_to_client: Packetizer,
@@ -61,7 +63,7 @@ impl UdpConnection {
         cx_info!(target: TAG, id, "Open");
         let socket = Self::create_socket(&id)?;
         let packetizer = Packetizer::new(&ipv4_header, &transport_header);
-        let interests = Ready::readable();
+        let interests = Interest::READABLE;
         let rc = Rc::new(RefCell::new(Self {
             id,
             client,
@@ -81,8 +83,7 @@ impl UdpConnection {
             // must anotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token =
-                selector.register(&self_ref.socket, handler, interests, PollOpt::level())?;
+            let token = selector.register(&mut self_ref.socket, handler, interests)?;
             self_ref.token = token;
         }
         Ok(rc)
@@ -90,7 +91,7 @@ impl UdpConnection {
 
     fn create_socket(id: &ConnectionId) -> io::Result<UdpSocket> {
         let autobind_addr = SocketAddr::new(Ipv4Addr::new(0, 0, 0, 0).into(), 0);
-        let udp_socket = UdpSocket::bind(&autobind_addr)?;
+        let udp_socket = UdpSocket::bind(autobind_addr)?;
         udp_socket.connect(id.rewritten_destination().into())?;
         Ok(udp_socket)
     }
@@ -117,12 +118,13 @@ impl UdpConnection {
     fn process(&mut self, selector: &mut Selector, event: Event) -> io::Result<()> {
         if !self.closed {
             self.touch();
-            let ready = event.readiness();
-            if ready.is_readable() || ready.is_writable() {
-                if ready.is_writable() {
+            let readable = event.is_readable();
+            let writable = event.is_writable();
+            if readable || writable {
+                if writable {
                     self.process_send(selector)?;
                 }
-                if !self.closed && ready.is_readable() {
+                if !self.closed && readable {
                     self.process_receive(selector)?;
                 }
                 if !self.closed {
@@ -140,48 +142,43 @@ impl UdpConnection {
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_send(&mut self, selector: &mut Selector) -> io::Result<()> {
-        match self.write() {
-            Ok(_) => (),
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                cx_debug!(target: TAG, self.id, "Spurious event, ignoring")
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    // rethrow
-                    return Err(err);
+        while !self.client_to_network.is_empty() {
+            match self.write() {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    cx_error!(
+                        target: TAG,
+                        self.id,
+                        "Cannot write: [{:?}] {}",
+                        err.kind(),
+                        err
+                    );
+                    self.close(selector);
+                    break;
                 }
-                cx_error!(
-                    target: TAG,
-                    self.id,
-                    "Cannot write: [{:?}] {}",
-                    err.kind(),
-                    err
-                );
-                self.close(selector);
             }
         }
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_receive(&mut self, selector: &mut Selector) -> io::Result<()> {
-        match self.read(selector) {
-            Ok(_) => (),
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    // rethrow
-                    return Err(err);
+        loop {
+            match self.read(selector) {
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    cx_error!(
+                        target: TAG,
+                        self.id,
+                        "Cannot read: [{:?}] {}",
+                        err.kind(),
+                        err
+                    );
+                    self.close(selector);
+                    break;
                 }
-                cx_error!(
-                    target: TAG,
-                    self.id,
-                    "Cannot read: [{:?}] {}",
-                    err.kind(),
-                    err
-                );
-                self.close(selector);
             }
         }
         Ok(())
@@ -201,7 +198,7 @@ impl UdpConnection {
                     "Packet ({} bytes) sent to client",
                     ipv4_packet.length()
                 );
-                if log_enabled!(target: TAG, Level::Trace) {
+                if logger::is_enabled(LevelFilter::Trace) {
                     cx_trace!(
                         target: TAG,
                         self.id,
@@ -216,22 +213,21 @@ impl UdpConnection {
     }
 
     fn write(&mut self) -> io::Result<()> {
-        self.client_to_network.write_to(&mut self.socket)?;
-        Ok(())
+        self.client_to_network.write_to(&mut self.socket)
     }
 
     fn update_interests(&mut self, selector: &mut Selector) {
-        let ready = if self.client_to_network.is_empty() {
-            Ready::readable()
+        let interest = if self.client_to_network.is_empty() {
+            Interest::READABLE
         } else {
-            Ready::readable() | Ready::writable()
+            Interest::READABLE | Interest::WRITABLE
         };
-        cx_debug!(target: TAG, self.id, "interests: {:?}", ready);
-        if self.interests != ready {
+        cx_debug!(target: TAG, self.id, "interests: {:?}", interest);
+        if self.interests != interest {
             // interests must be changed
-            self.interests = ready;
+            self.interests = interest;
             selector
-                .reregister(&self.socket, self.token, ready, PollOpt::level())
+                .reregister(&mut self.socket, self.token, interest)
                 .expect("Cannot register on poll");
         }
     }
@@ -271,7 +267,7 @@ impl Connection for UdpConnection {
     fn close(&mut self, selector: &mut Selector) {
         cx_info!(target: TAG, self.id, "Close");
         self.closed = true;
-        if let Err(err) = selector.deregister(&self.socket, self.token) {
+        if let Err(err) = selector.deregister(&mut self.socket, self.token) {
             // do not panic, this can happen in mio
             // see <https://github.com/Genymobile/gnirehtet/issues/136>
             cx_warn!(

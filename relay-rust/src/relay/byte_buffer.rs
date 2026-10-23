@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -15,7 +16,6 @@
  */
 
 use std::io;
-use std::ptr;
 
 pub struct ByteBuffer {
     buf: Box<[u8]>,
@@ -41,6 +41,10 @@ impl ByteBuffer {
         &self.buf[..self.head]
     }
 
+    pub fn remaining(&self) -> usize {
+        self.buf.len() - self.head
+    }
+
     pub fn peek_mut(&mut self) -> &mut [u8] {
         &mut self.buf[..self.head]
     }
@@ -50,28 +54,23 @@ impl ByteBuffer {
         self.head -= length;
         if self.head > 0 {
             // some data remaining, move them to the front of the buffer
-            unsafe {
-                let buf_ptr = self.buf.as_mut_ptr();
-
-                // Before:
-                //
-                //  consumed                  old_head
-                // |        |....................|
-                //  <------>
-                //   length
-                //
-                // After:
-                //
-                //                  new_head (= old_head - length)
-                // |....................|
-                //                       <------>
-                //                        length
-                //
-                // move from [length..old_head] to [0..new_head]
-                //
-                // semantically equivalent to memmove()
-                ptr::copy(buf_ptr.add(length), buf_ptr, self.head);
-            }
+            //
+            // Before:
+            //
+            //  consumed                  old_head
+            // |        |....................|
+            //  <------>
+            //   length
+            //
+            // After:
+            //
+            //                  new_head (= old_head - length)
+            // |....................|
+            //                       <------>
+            //                        length
+            //
+            // move from [length..old_head] to [0..new_head]
+            self.buf.copy_within(length..length + self.head, 0);
         }
     }
 }

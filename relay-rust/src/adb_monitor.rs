@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +15,10 @@
  * limitations under the License.
  */
 
-use log::*;
-use relaylib::byte_buffer::ByteBuffer;
+use crate::relay::byte_buffer::ByteBuffer;
+use crate::{error, info};
 use std::io::{self, Write};
-use std::net::{SocketAddr, TcpStream};
+use std::net::{Ipv4Addr, SocketAddr, TcpStream};
 use std::process;
 use std::str;
 use std::thread;
@@ -25,31 +26,28 @@ use std::time::Duration;
 
 const TAG: &str = "AdbMonitor";
 
-pub trait AdbMonitorCallback {
-    fn on_new_device_connected(&self, serial: &str);
-}
-
-impl<F> AdbMonitorCallback for F
-where
-    F: Fn(&str),
-{
-    fn on_new_device_connected(&self, serial: &str) {
-        self(serial);
+#[inline]
+pub(crate) fn get_adb_path() -> String {
+    if let Some(env_adb) = std::env::var_os("ADB") {
+        env_adb.into_string().expect("invalid ADB value")
+    } else {
+        "adb".to_string()
     }
 }
+
 pub struct AdbMonitor {
-    callback: Box<dyn AdbMonitorCallback>,
+    callback: Box<dyn Fn(&str)>,
     buf: ByteBuffer,
     connected_devices: Vec<String>,
 }
 
 impl AdbMonitor {
-    const TRACK_DEVICES_REQUEST: &'static [u8] = b"0012host:track-devices";
+    const TRACK_DEVICES_REQUEST: &[u8] = b"0012host:track-devices";
     const BUFFER_SIZE: usize = 1024;
-    const RETRY_DELAY_ADB_DAEMON_OK: u64 = 1000;
-    const RETRY_DELAY_ADB_DAEMON_KO: u64 = 5000;
+    const RETRY_DELAY_ADB_DAEMON_OK: Duration = Duration::from_secs(1);
+    const RETRY_DELAY_ADB_DAEMON_KO: Duration = Duration::from_secs(5);
 
-    pub fn new(callback: Box<dyn AdbMonitorCallback>) -> Self {
+    pub fn new(callback: Box<dyn Fn(&str)>) -> Self {
         Self {
             callback,
             buf: ByteBuffer::new(Self::BUFFER_SIZE),
@@ -67,8 +65,8 @@ impl AdbMonitor {
     }
 
     fn track_devices(&mut self) -> io::Result<()> {
-        let adbd_addr = SocketAddr::from(([127, 0, 0, 1], 5037));
-        let mut stream = TcpStream::connect(adbd_addr)?;
+        let address = SocketAddr::from((Ipv4Addr::LOCALHOST, 5037));
+        let mut stream = TcpStream::connect(address)?;
         self.track_devices_on_stream(&mut stream)
     }
 
@@ -85,7 +83,12 @@ impl AdbMonitor {
 
     fn consume_okay(&mut self, stream: &mut TcpStream) -> io::Result<bool> {
         while self.buf.peek().len() < 4 {
-            self.buf.read_from(stream)?;
+            if !self.buf.read_from(stream)? {
+                return Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "ADB daemon closed the 'track-devices' connection",
+                ));
+            }
         }
         let ok = b"OKAY" == &self.buf.peek()[0..4];
         self.buf.consume(4);
@@ -106,23 +109,21 @@ impl AdbMonitor {
 
     fn next_packet(&mut self, stream: &mut TcpStream) -> io::Result<String> {
         loop {
-            let packet = Self::read_packet(&mut self.buf)?;
-            if let Some(packet) = packet {
+            if let Some(packet) = Self::read_packet(&mut self.buf)? {
                 return Ok(packet);
-            } else {
-                self.fill_buffer_from(stream)?;
             }
+            self.fill_buffer_from(stream)?;
         }
     }
 
     fn fill_buffer_from(&mut self, stream: &mut TcpStream) -> io::Result<()> {
-        match self.buf.read_from(stream) {
-            Ok(false) => Err(io::Error::new(
+        if self.buf.read_from(stream)? {
+            Ok(())
+        } else {
+            Err(io::Error::new(
                 io::ErrorKind::UnexpectedEof,
-                "ADB daemon closed the track-devices connexion",
-            )),
-            Ok(_) => Ok(()),
-            Err(err) => Err(err),
+                "ADB daemon closed the 'track-devices' connection",
+            ))
         }
     }
 
@@ -145,8 +146,8 @@ impl AdbMonitor {
                     format!("Packet size should not be that big: {}", len),
                 ));
             }
-            if input.len() - 4usize >= len as usize {
-                Ok(Some(4usize + len as usize))
+            if input.len() - 4 >= len as usize {
+                Ok(Some(4 + len as usize))
             } else {
                 // not enough data
                 Ok(None)
@@ -158,7 +159,7 @@ impl AdbMonitor {
         let current_connected_devices = self.parse_connected_devices(packet);
         for serial in &current_connected_devices {
             if !self.connected_devices.contains(serial) {
-                self.callback.on_new_device_connected(serial.as_str());
+                (self.callback)(serial);
             }
         }
         self.connected_devices = current_connected_devices;
@@ -169,27 +170,26 @@ impl AdbMonitor {
             .lines()
             .filter_map(|line| {
                 let mut split = line.split_whitespace();
-                if let Some(serial) = split.next() {
-                    if let Some(state) = split.next() {
-                        if state == "device" {
-                            return Some(serial.to_string());
-                        }
-                    }
+                let serial = split.next()?;
+                let state = split.next()?;
+                if state == "device" {
+                    Some(serial.to_string())
+                } else {
+                    None
                 }
-                None
             })
             .collect()
     }
 
     fn parse_length(data: &[u8]) -> io::Result<u32> {
-        assert!(data.len() == 4, "Invalid length field value");
+        assert_eq!(data.len(), 4, "Invalid length field value");
         let hexa = str::from_utf8(data).map_err(|err| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("Cannot read hexa length as UTF-8 ({})", err),
             )
         })?;
-        u32::from_str_radix(hexa, 0x10).map_err(|err| {
+        u32::from_str_radix(hexa, 16).map_err(|err| {
             io::Error::new(
                 io::ErrorKind::InvalidInput,
                 format!("Cannot parse hexa length ({})", err),
@@ -198,29 +198,27 @@ impl AdbMonitor {
     }
 
     fn repair_adb_daemon() {
-        if Self::start_adb_daemon() {
-            thread::sleep(Duration::from_millis(Self::RETRY_DELAY_ADB_DAEMON_OK));
+        let delay = if Self::start_adb_daemon() {
+            Self::RETRY_DELAY_ADB_DAEMON_OK
         } else {
-            thread::sleep(Duration::from_millis(Self::RETRY_DELAY_ADB_DAEMON_KO));
-        }
+            Self::RETRY_DELAY_ADB_DAEMON_KO
+        };
+        thread::sleep(delay);
     }
 
     fn start_adb_daemon() -> bool {
         info!(target: TAG, "Restarting adb daemon");
-        match process::Command::new("adb")
-            .args(&["start-server"])
+        match process::Command::new(get_adb_path())
+            .arg("start-server")
             .status()
         {
-            Ok(exit_status) => {
-                if exit_status.success() {
-                    true
-                } else {
-                    error!(
-                        target: TAG,
-                        "Could not restart adb daemon (exited on error)"
-                    );
-                    false
-                }
+            Ok(exit_status) if exit_status.success() => true,
+            Ok(_) => {
+                error!(
+                    target: TAG,
+                    "Could not restart adb daemon (exited on error)"
+                );
+                false
             }
             Err(err) => {
                 error!(target: TAG, "Could not restart adb daemon: {}", err);
@@ -230,16 +228,12 @@ impl AdbMonitor {
     }
 
     fn binary_to_string(data: &[u8]) -> io::Result<String> {
-        let raw_content = data.to_vec();
-        let content = String::from_utf8(raw_content);
-        if let Ok(content) = content {
-            Ok(content)
-        } else {
-            Err(io::Error::new(
+        str::from_utf8(data).map(str::to_owned).map_err(|_| {
+            io::Error::new(
                 io::ErrorKind::InvalidInput,
                 "Track-devices string is not valid UTF-8",
-            ))
-        }
+            )
+        })
     }
 }
 

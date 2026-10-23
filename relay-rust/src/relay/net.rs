@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +15,10 @@
  * limitations under the License.
  */
 
-use super::binary;
 use std::net::{Ipv4Addr, SocketAddrV4};
 
 pub fn to_addr(ipv4: u32) -> Ipv4Addr {
-    let raw = binary::to_byte_array(ipv4);
-    Ipv4Addr::new(raw[0], raw[1], raw[2], raw[3])
+    Ipv4Addr::from(ipv4)
 }
 
 pub fn to_socket_addr(ipv4: u32, port: u16) -> SocketAddrV4 {

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +15,7 @@
  * limitations under the License.
  */
 
-use byteorder::{BigEndian, ByteOrder};
+use super::binary;
 use std::mem;
 
 pub struct Ipv4Header<'a> {
@@ -50,14 +51,14 @@ impl Ipv4HeaderData {
         Self {
             _version: raw[0] >> 4,
             header_length: (raw[0] & 0xf) << 2,
-            total_length: BigEndian::read_u16(&raw[2..4]),
+            total_length: binary::read_u16(&raw[2..4]),
             protocol: match raw[9] {
                 6 => Protocol::Tcp,
                 17 => Protocol::Udp,
                 _ => Protocol::Other,
             },
-            source: BigEndian::read_u32(&raw[12..16]),
-            destination: BigEndian::read_u32(&raw[16..20]),
+            source: binary::read_u32(&raw[12..16]),
+            destination: binary::read_u32(&raw[16..20]),
         }
     }
 
@@ -95,7 +96,7 @@ pub fn peek_version_length(raw: &[u8]) -> Option<(u8, u16)> {
         // version is stored in the 4 first bits
         let version = raw[0] >> 4;
         // packet length is 16 bits starting at offset 2
-        let length = BigEndian::read_u16(&raw[2..4]);
+        let length = binary::read_u16(&raw[2..4]);
         Some((version, length))
     } else {
         None
@@ -109,10 +110,7 @@ macro_rules! ipv4_header_common {
         #[allow(dead_code)]
         impl<'a> $name<'a> {
             pub fn new(raw: $raw_type, data: $data_type) -> Self {
-                Self {
-                    raw: raw,
-                    data: data,
-                }
+                Self { raw, data }
             }
 
             pub fn raw(&self) -> &[u8] {
@@ -162,17 +160,17 @@ impl<'a> Ipv4HeaderMut<'a> {
 
     pub fn set_total_length(&mut self, total_length: u16) {
         self.data.total_length = total_length;
-        BigEndian::write_u16(&mut self.raw[2..4], total_length);
+        binary::write_u16(&mut self.raw[2..4], total_length);
     }
 
     pub fn set_source(&mut self, source: u32) {
         self.data.source = source;
-        BigEndian::write_u32(&mut self.raw[12..16], source);
+        binary::write_u32(&mut self.raw[12..16], source);
     }
 
     pub fn set_destination(&mut self, destination: u32) {
         self.data.destination = destination;
-        BigEndian::write_u32(&mut self.raw[16..20], destination);
+        binary::write_u32(&mut self.raw[16..20], destination);
     }
 
     pub fn swap_source_and_destination(&mut self) {
@@ -183,11 +181,11 @@ impl<'a> Ipv4HeaderMut<'a> {
     }
 
     fn checksum(&self) -> u16 {
-        BigEndian::read_u16(&self.raw[10..12])
+        binary::read_u16(&self.raw[10..12])
     }
 
     fn set_checksum(&mut self, checksum: u16) {
-        BigEndian::write_u16(&mut self.raw[10..12], checksum);
+        binary::write_u16(&mut self.raw[10..12], checksum);
     }
 
     pub fn update_checksum(&mut self) {
@@ -197,7 +195,7 @@ impl<'a> Ipv4HeaderMut<'a> {
             .chain(6..j)
             .map(|i| {
                 let range = 2 * i..2 * (i + 1);
-                u32::from(BigEndian::read_u16(&self.raw[range]))
+                u32::from(binary::read_u16(&self.raw[range]))
             })
             .sum::<u32>();
         while (sum & !0xffff) != 0 {
@@ -209,21 +207,20 @@ impl<'a> Ipv4HeaderMut<'a> {
 
 #[cfg(test)]
 mod tests {
+    #![allow(clippy::identity_op)]
     use super::*;
-    use byteorder::{BigEndian, WriteBytesExt};
 
     fn create_header() -> Vec<u8> {
-        let mut raw: Vec<u8> = Vec::new();
-        raw.reserve(20);
-        raw.write_u8(4u8 << 4 | 5).unwrap(); // version_and_ihl
-        raw.write_u8(0).unwrap(); //ToS
-        raw.write_u16::<BigEndian>(28).unwrap(); // total length
-        raw.write_u32::<BigEndian>(0).unwrap(); // id_flags_fragment_offset
-        raw.write_u8(0).unwrap(); // TTL
-        raw.write_u8(17).unwrap(); // protocol (UDP)
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
-        raw.write_u32::<BigEndian>(0x12345678).unwrap(); // source address
-        raw.write_u32::<BigEndian>(0x42424242).unwrap(); // destination address
+        let mut raw: Vec<u8> = Vec::with_capacity(20);
+        raw.push(4u8 << 4 | 5); // version_and_ihl
+        raw.push(0); //ToS
+        raw.extend_from_slice(&(28u16).to_be_bytes()); // total length
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id_flags_fragment_offset
+        raw.push(0); // TTL
+        raw.push(17); // protocol (UDP)
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x12345678u32).to_be_bytes()); // source address
+        raw.extend_from_slice(&(0x42424242u32).to_be_bytes()); // destination address
         raw
     }
 
@@ -253,9 +250,9 @@ mod tests {
         assert_eq!(42, header.total_length());
 
         // assert that the buffer has been modified
-        let raw_source = BigEndian::read_u32(&header.raw[12..16]);
-        let raw_destination = BigEndian::read_u32(&header.raw[16..20]);
-        let raw_total_length = BigEndian::read_u16(&header.raw[2..4]);
+        let raw_source = binary::read_u32(&header.raw[12..16]);
+        let raw_destination = binary::read_u32(&header.raw[16..20]);
+        let raw_total_length = binary::read_u16(&header.raw[2..4]);
         assert_eq!(0x87654321, raw_source);
         assert_eq!(0x24242424, raw_destination);
         assert_eq!(42, raw_total_length);
@@ -265,8 +262,8 @@ mod tests {
         assert_eq!(0x24242424, header.source());
         assert_eq!(0x87654321, header.destination());
 
-        let raw_source = BigEndian::read_u32(&header.raw[12..16]);
-        let raw_destination = BigEndian::read_u32(&header.raw[16..20]);
+        let raw_source = binary::read_u32(&header.raw[12..16]);
+        let raw_destination = binary::read_u32(&header.raw[16..20]);
         assert_eq!(0x24242424, raw_source);
         assert_eq!(0x87654321, raw_destination);
     }

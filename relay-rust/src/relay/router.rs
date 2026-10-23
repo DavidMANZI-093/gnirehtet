@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,7 +15,11 @@
  * limitations under the License.
  */
 
-use log::*;
+use crate::{
+    debug, error,
+    logger::{self, LevelFilter},
+    trace, warn,
+};
 use std::cell::RefCell;
 use std::io;
 use std::rc::{Rc, Weak};
@@ -82,7 +87,7 @@ impl Router {
             }
         } else {
             warn!(target: TAG, "Dropping invalid packet");
-            if log_enabled!(target: TAG, Level::Trace) {
+            if logger::is_enabled(LevelFilter::Trace) {
                 trace!(
                     target: TAG,
                     "{}",
@@ -136,10 +141,7 @@ impl Router {
                 ipv4_header,
                 transport_header,
             )?),
-            p => Err(io::Error::new(
-                io::ErrorKind::Other,
-                format!("Unsupported protocol: {:?}", p),
-            )),
+            p => Err(io::Error::other(format!("Unsupported protocol: {:?}", p))),
         }
     }
 

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,6 +17,12 @@
 
 pub use self::relay::Relay;
 pub mod byte_buffer;
+
+use std::io;
+
+pub fn run(port: u16) -> io::Result<()> {
+    Relay::new(port).run()
+}
 
 mod binary;
 mod client;

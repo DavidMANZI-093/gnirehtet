@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +15,8 @@
  * limitations under the License.
  */
 
-mod relay;
-pub use crate::relay::byte_buffer;
-
-use crate::relay::Relay;
-use std::io;
-
-pub fn relay(port: u16) -> io::Result<()> {
-    Relay::new(port).run()
-}
+pub mod adb_monitor;
+pub mod cli;
+pub mod executor;
+pub mod logger;
+pub mod relay;

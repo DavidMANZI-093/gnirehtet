@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +15,8 @@
  * limitations under the License.
  */
 
+use super::binary;
 use super::ipv4_header::Ipv4HeaderData;
-use byteorder::{BigEndian, ByteOrder};
 use std::mem;
 
 pub const UDP_HEADER_LENGTH: u8 = 8;
@@ -40,8 +41,8 @@ pub struct UdpHeaderData {
 impl UdpHeaderData {
     pub fn parse(raw: &[u8]) -> Self {
         Self {
-            source_port: BigEndian::read_u16(&raw[0..2]),
-            destination_port: BigEndian::read_u16(&raw[2..4]),
+            source_port: binary::read_u16(&raw[0..2]),
+            destination_port: binary::read_u16(&raw[2..4]),
         }
     }
 
@@ -73,10 +74,7 @@ macro_rules! udp_header_common {
         #[allow(dead_code)]
         impl<'a> $name<'a> {
             pub fn new(raw: $raw_type, data: $data_type) -> Self {
-                Self {
-                    raw: raw,
-                    data: data,
-                }
+                Self { raw, data }
             }
 
             #[inline]
@@ -121,13 +119,13 @@ impl<'a> UdpHeaderMut<'a> {
     #[inline]
     pub fn set_source_port(&mut self, source_port: u16) {
         self.data.source_port = source_port;
-        BigEndian::write_u16(&mut self.raw[0..2], source_port);
+        binary::write_u16(&mut self.raw[0..2], source_port);
     }
 
     #[inline]
     pub fn set_destination_port(&mut self, destination_port: u16) {
         self.data.destination_port = destination_port;
-        BigEndian::write_u16(&mut self.raw[2..4], destination_port);
+        binary::write_u16(&mut self.raw[2..4], destination_port);
     }
 
     pub fn swap_source_and_destination(&mut self) {
@@ -140,12 +138,12 @@ impl<'a> UdpHeaderMut<'a> {
     #[inline]
     pub fn set_payload_length(&mut self, payload_length: u16) {
         let total_length = u16::from(UDP_HEADER_LENGTH) + payload_length;
-        BigEndian::write_u16(&mut self.raw[4..6], total_length);
+        binary::write_u16(&mut self.raw[4..6], total_length);
     }
 
     #[inline]
     fn set_checksum(&mut self, checksum: u16) {
-        BigEndian::write_u16(&mut self.raw[6..8], checksum);
+        binary::write_u16(&mut self.raw[6..8], checksum);
     }
 
     #[inline]
@@ -158,15 +156,13 @@ impl<'a> UdpHeaderMut<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use byteorder::{BigEndian, WriteBytesExt};
 
     fn create_header() -> Vec<u8> {
-        let mut raw = Vec::new();
-        raw.reserve(8);
-        raw.write_u16::<BigEndian>(1234).unwrap(); // source port
-        raw.write_u16::<BigEndian>(5678).unwrap(); // destination port
-        raw.write_u16::<BigEndian>(42).unwrap(); // length
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
+        let mut raw = Vec::with_capacity(8);
+        raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(42u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
         raw
     }
 
@@ -193,9 +189,9 @@ mod tests {
         {
             let raw = header.raw();
             // assert that the buffer has been modified
-            let raw_source_port = BigEndian::read_u16(&raw[0..2]);
-            let raw_destination_port = BigEndian::read_u16(&raw[2..4]);
-            let raw_total_length = BigEndian::read_u16(&raw[4..6]);
+            let raw_source_port = binary::read_u16(&raw[0..2]);
+            let raw_destination_port = binary::read_u16(&raw[2..4]);
+            let raw_total_length = binary::read_u16(&raw[4..6]);
             assert_eq!(1111, raw_source_port);
             assert_eq!(2222, raw_destination_port);
             assert_eq!(34 + 8, raw_total_length);
@@ -207,8 +203,8 @@ mod tests {
         assert_eq!(1111, header.destination_port());
 
         let raw = header.raw();
-        let raw_source_port = BigEndian::read_u16(&raw[0..2]);
-        let raw_destination_port = BigEndian::read_u16(&raw[2..4]);
+        let raw_source_port = binary::read_u16(&raw[0..2]);
+        let raw_destination_port = binary::read_u16(&raw[2..4]);
         assert_eq!(2222, raw_source_port);
         assert_eq!(1111, raw_destination_port);
     }

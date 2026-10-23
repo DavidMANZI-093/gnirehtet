@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -19,8 +20,10 @@ use super::byte_buffer::ByteBuffer;
 use super::ipv4_header;
 use super::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
 
-use log::*;
+use crate::trace;
 use std::io;
+
+const TAG: &str = "Ipv4PacketBuffer";
 
 pub struct Ipv4PacketBuffer {
     buf: ByteBuffer,
@@ -37,9 +40,13 @@ impl Ipv4PacketBuffer {
         self.buf.read_from(source)
     }
 
+    pub fn remaining(&self) -> usize {
+        self.buf.remaining()
+    }
+
     fn available_packet_length(&self) -> Option<u16> {
         let data = self.buf.peek();
-        trace!("Parse packet: {}", binary::build_packet_string(data));
+        trace!(target: TAG, "Parse packet: {}", binary::build_packet_string(data));
         if let Some((version, length)) = ipv4_header::peek_version_length(data) {
             assert!(version == 4, "Not an Ipv4 packet, version={}", version);
             if length as usize <= data.len() {
@@ -55,7 +62,7 @@ impl Ipv4PacketBuffer {
         }
     }
 
-    pub fn as_ipv4_packet(&mut self) -> Option<Ipv4Packet> {
+    pub fn as_ipv4_packet(&mut self) -> Option<Ipv4Packet<'_>> {
         if self.available_packet_length().is_some() {
             let data = self.buf.peek_mut();
             Some(Ipv4Packet::parse(data))
@@ -78,7 +85,6 @@ mod tests {
     use super::*;
     use crate::relay::ipv4_header::Protocol;
     use crate::relay::transport_header::TransportHeaderData;
-    use byteorder::{BigEndian, WriteBytesExt};
     use std::io;
 
     fn create_packet() -> Vec<u8> {
@@ -88,41 +94,41 @@ mod tests {
     }
 
     fn write_packet_to(raw: &mut Vec<u8>) {
-        raw.write_u8(4u8 << 4 | 5).unwrap();
-        raw.write_u8(0).unwrap(); // ToS
-        raw.write_u16::<BigEndian>(32).unwrap(); // total length 20 + 8 + 4
-        raw.write_u32::<BigEndian>(0).unwrap(); // id_flags_fragment_offset
-        raw.write_u8(0).unwrap(); // TTL
-        raw.write_u8(17).unwrap(); // protocol (UDP)
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
-        raw.write_u32::<BigEndian>(0x12345678).unwrap(); // source address
-        raw.write_u32::<BigEndian>(0x42424242).unwrap(); // destination address
+        raw.push(4u8 << 4 | 5);
+        raw.push(0); // ToS
+        raw.extend_from_slice(&(32u16).to_be_bytes()); // total length 20 + 8 + 4
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id_flags_fragment_offset
+        raw.push(0); // TTL
+        raw.push(17); // protocol (UDP)
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x12345678u32).to_be_bytes()); // source address
+        raw.extend_from_slice(&(0x42424242u32).to_be_bytes()); // destination address
 
-        raw.write_u16::<BigEndian>(1234).unwrap(); // source port
-        raw.write_u16::<BigEndian>(5678).unwrap(); // destination port
-        raw.write_u16::<BigEndian>(12).unwrap(); // length
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
+        raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(12u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
 
-        raw.write_u32::<BigEndian>(0x11223344).unwrap(); // payload
+        raw.extend_from_slice(&(0x11223344u32).to_be_bytes()); // payload
     }
 
     fn write_another_packet_to(raw: &mut Vec<u8>) {
-        raw.write_u8(4u8 << 4 | 5).unwrap();
-        raw.write_u8(0).unwrap(); // ToS
-        raw.write_u16::<BigEndian>(29).unwrap(); // total length 20 + 8 + 1
-        raw.write_u32::<BigEndian>(0).unwrap(); // id_flags_fragment_offset
-        raw.write_u8(0).unwrap(); // TTL
-        raw.write_u8(17).unwrap(); // protocol (UDP)
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
-        raw.write_u32::<BigEndian>(0x11111111).unwrap(); // source address
-        raw.write_u32::<BigEndian>(0x22222222).unwrap(); // destination address
+        raw.push(4u8 << 4 | 5);
+        raw.push(0); // ToS
+        raw.extend_from_slice(&(29u16).to_be_bytes()); // total length 20 + 8 + 1
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id_flags_fragment_offset
+        raw.push(0); // TTL
+        raw.push(17); // protocol (UDP)
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x11111111u32).to_be_bytes()); // source address
+        raw.extend_from_slice(&(0x22222222u32).to_be_bytes()); // destination address
 
-        raw.write_u16::<BigEndian>(1111).unwrap(); // source port
-        raw.write_u16::<BigEndian>(2222).unwrap(); // destination port
-        raw.write_u16::<BigEndian>(9).unwrap(); // length
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
+        raw.extend_from_slice(&(1111u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(2222u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(9u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
 
-        raw.write_u8(0x99).unwrap(); // payload
+        raw.push(0x99); // payload
     }
 
     fn check_packet_headers(ipv4_packet: &Ipv4Packet) {
@@ -133,8 +139,7 @@ mod tests {
         assert_eq!(0x12345678, ipv4_header.source());
         assert_eq!(0x42424242, ipv4_header.destination());
 
-        if let Some(&TransportHeaderData::Udp(ref udp_header)) = ipv4_packet.transport_header_data()
-        {
+        if let Some(TransportHeaderData::Udp(udp_header)) = ipv4_packet.transport_header_data() {
             assert_eq!(1234, udp_header.source_port());
             assert_eq!(5678, udp_header.destination_port());
         } else {
@@ -150,8 +155,7 @@ mod tests {
         assert_eq!(0x11111111, ipv4_header.source());
         assert_eq!(0x22222222, ipv4_header.destination());
 
-        if let Some(&TransportHeaderData::Udp(ref udp_header)) = ipv4_packet.transport_header_data()
-        {
+        if let Some(TransportHeaderData::Udp(udp_header)) = ipv4_packet.transport_header_data() {
             assert_eq!(1111, udp_header.source_port());
             assert_eq!(2222, udp_header.destination_port());
         } else {

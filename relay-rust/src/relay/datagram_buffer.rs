@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +15,10 @@
  * limitations under the License.
  */
 
-use byteorder::{BigEndian, ByteOrder};
-use log::*;
+use crate::error;
 use std::io;
 
+use super::binary;
 use super::datagram::{DatagramSender, MAX_DATAGRAM_LENGTH};
 
 const HEADER_LENGTH: usize = 2;
@@ -73,22 +74,20 @@ impl DatagramBuffer {
             !self.is_empty(),
             "DatagramBuffer.write_to() called while empty"
         );
-        let length = self.read_length() as usize;
-        let source_slice = &self.buf[self.tail..self.tail + length];
-        self.tail += length;
-        if self.tail >= self.circular_buffer_length {
-            self.tail = 0;
-        }
+        let length = binary::read_u16(&self.buf[self.tail..self.tail + HEADER_LENGTH]) as usize;
+        let data_start = self.tail + HEADER_LENGTH;
+        let source_slice = &self.buf[data_start..data_start + length];
         let w = destination.send(source_slice)?;
         if w != length {
             error!(
                 target: TAG,
                 "Cannot write the whole datagram to the buffer (only {}/{})", w, length
             );
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Cannot write the whole datagram",
-            ));
+            return Err(io::Error::other("Cannot write the whole datagram"));
+        }
+        self.tail = data_start + length;
+        if self.tail >= self.circular_buffer_length {
+            self.tail = 0;
         }
         Ok(())
     }
@@ -101,10 +100,7 @@ impl DatagramBuffer {
             MAX_DATAGRAM_LENGTH
         );
         if !self.has_enough_space_for(length) {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "Datagram buffer is full",
-            ));
+            return Err(io::Error::other("Datagram buffer is full"));
         }
         self.write_length(length as u16);
         let target_slice = &mut self.buf[self.head..self.head + length];
@@ -116,13 +112,8 @@ impl DatagramBuffer {
         Ok(())
     }
 
-    fn read_length(&mut self) -> u16 {
-        self.tail += 2;
-        BigEndian::read_u16(&self.buf[self.tail - 2..self.tail])
-    }
-
     fn write_length(&mut self, length: u16) {
-        BigEndian::write_u16(&mut self.buf[self.head..self.head + 2], length);
+        binary::write_u16(&mut self.buf[self.head..self.head + 2], length);
         self.head += 2;
     }
 }
@@ -163,6 +154,41 @@ mod tests {
         assert_eq!(read_datagram(&mut datagram_buffer), datagram0);
         assert_eq!(read_datagram(&mut datagram_buffer), datagram3);
         assert_eq!(read_datagram(&mut datagram_buffer), datagram4);
+    }
+
+    struct WouldBlockOnceSender {
+        sent: Vec<Vec<u8>>,
+        block: bool,
+    }
+
+    impl DatagramSender for WouldBlockOnceSender {
+        fn send(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.block {
+                self.block = false;
+                return Err(io::Error::from(io::ErrorKind::WouldBlock));
+            }
+            self.sent.push(buf.to_vec());
+            Ok(buf.len())
+        }
+    }
+
+    #[test]
+    fn preserve_datagram_on_would_block() {
+        let datagram = create_datagram(5);
+        let mut datagram_buffer = DatagramBuffer::new(9);
+        datagram_buffer.read_from(&datagram).unwrap();
+
+        let mut sender = WouldBlockOnceSender {
+            sent: Vec::new(),
+            block: true,
+        };
+        let err = datagram_buffer.write_to(&mut sender).unwrap_err();
+        assert_eq!(err.kind(), io::ErrorKind::WouldBlock);
+        assert!(!datagram_buffer.is_empty());
+
+        datagram_buffer.write_to(&mut sender).unwrap();
+        assert!(datagram_buffer.is_empty());
+        assert_eq!(sender.sent, vec![datagram]);
     }
 
     #[test]

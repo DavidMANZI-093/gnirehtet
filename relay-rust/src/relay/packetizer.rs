@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -66,11 +67,11 @@ impl Packetizer {
         }
     }
 
-    pub fn packetize_empty_payload(&mut self) -> Ipv4Packet {
+    pub fn packetize_empty_payload(&mut self) -> Ipv4Packet<'_> {
         self.build(0)
     }
 
-    pub fn packetize<R: DatagramReceiver>(&mut self, source: &mut R) -> io::Result<Ipv4Packet> {
+    pub fn packetize<R: DatagramReceiver>(&mut self, source: &mut R) -> io::Result<Ipv4Packet<'_>> {
         let r = source.recv(&mut self.buffer[self.payload_index..])?;
         let ipv4_packet = self.build(r as u16);
         Ok(ipv4_packet)
@@ -85,7 +86,7 @@ impl Packetizer {
         &mut self,
         source: &mut R,
         max_chunk_size: Option<usize>,
-    ) -> io::Result<Option<Ipv4Packet>> {
+    ) -> io::Result<Option<Ipv4Packet<'_>>> {
         let mut adapter = ReadAdapter::new(source, max_chunk_size);
         let r = adapter.recv(&mut self.buffer[self.payload_index..])?;
         let option = if r > 0 {
@@ -97,17 +98,17 @@ impl Packetizer {
         Ok(option)
     }
 
-    pub fn ipv4_header_mut(&mut self) -> Ipv4HeaderMut {
+    pub fn ipv4_header_mut(&mut self) -> Ipv4HeaderMut<'_> {
         let raw = &mut self.buffer[..self.transport_index];
         self.ipv4_header_data.bind_mut(raw)
     }
 
-    pub fn transport_header_mut(&mut self) -> TransportHeaderMut {
+    pub fn transport_header_mut(&mut self) -> TransportHeaderMut<'_> {
         let raw = &mut self.buffer[self.transport_index..self.payload_index];
         self.transport_header_data.bind_mut(raw)
     }
 
-    fn build(&mut self, payload_length: u16) -> Ipv4Packet {
+    fn build(&mut self, payload_length: u16) -> Ipv4Packet<'_> {
         let total_length = self.payload_index as u16 + payload_length;
 
         self.ipv4_header_mut().set_total_length(total_length);
@@ -123,7 +124,7 @@ impl Packetizer {
         ipv4_packet
     }
 
-    pub fn inflate(&mut self, packet_length: u16) -> Ipv4Packet {
+    pub fn inflate(&mut self, packet_length: u16) -> Ipv4Packet<'_> {
         Ipv4Packet::new(
             &mut self.buffer[..packet_length as usize],
             self.ipv4_header_data.clone(),
@@ -136,27 +137,26 @@ impl Packetizer {
 mod tests {
     use super::*;
     use crate::relay::datagram::tests::MockDatagramSocket;
-    use byteorder::{BigEndian, WriteBytesExt};
     use std::io;
 
     fn create_packet() -> Vec<u8> {
         let mut raw = Vec::new();
-        raw.write_u8(4u8 << 4 | 5).unwrap();
-        raw.write_u8(0).unwrap(); // ToS
-        raw.write_u16::<BigEndian>(32).unwrap(); // total length 20 + 8 + 4
-        raw.write_u32::<BigEndian>(0).unwrap(); // id_flags_fragment_offset
-        raw.write_u8(0).unwrap(); // TTL
-        raw.write_u8(17).unwrap(); // protocol (UDP)
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
-        raw.write_u32::<BigEndian>(0x12345678).unwrap(); // source address
-        raw.write_u32::<BigEndian>(0x42424242).unwrap(); // destination address
+        raw.push(4u8 << 4 | 5);
+        raw.push(0); // ToS
+        raw.extend_from_slice(&(32u16).to_be_bytes()); // total length 20 + 8 + 4
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id_flags_fragment_offset
+        raw.push(0); // TTL
+        raw.push(17); // protocol (UDP)
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x12345678u32).to_be_bytes()); // source address
+        raw.extend_from_slice(&(0x42424242u32).to_be_bytes()); // destination address
 
-        raw.write_u16::<BigEndian>(1234).unwrap(); // source port
-        raw.write_u16::<BigEndian>(5678).unwrap(); // destination port
-        raw.write_u16::<BigEndian>(12).unwrap(); // length
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
+        raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(12u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
 
-        raw.write_u32::<BigEndian>(0x11223344).unwrap(); // payload
+        raw.extend_from_slice(&(0x11223344u32).to_be_bytes()); // payload
         raw
     }
 

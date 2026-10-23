@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,10 +15,10 @@
  * limitations under the License.
  */
 
-use log::*;
+use crate::logger::{self, LevelFilter};
+use mio::event::Event;
 use mio::net::TcpStream;
-use mio::{Event, PollOpt, Ready, Token};
-use rand::random;
+use mio::{Interest, Token};
 use std::cell::RefCell;
 use std::cmp;
 use std::io;
@@ -41,14 +42,14 @@ const TAG: &str = "TcpConnection";
 // same value as GnirehtetService.MTU in the client
 const MTU: u16 = 0x4000;
 // 20 bytes for IP headers, 20 bytes for TCP headers
-const MAX_PAYLOAD_LENGTH: u16 = MTU - 20 - 20 as u16;
+const MAX_PAYLOAD_LENGTH: u16 = MTU - 20 - 20_u16;
 
 pub struct TcpConnection {
     self_weak: Weak<RefCell<TcpConnection>>,
     id: ConnectionId,
     client: Weak<RefCell<Client>>,
     stream: TcpStream,
-    interests: Ready,
+    interests: Option<Interest>,
     token: Token,
     client_to_network: StreamBuffer,
     network_to_client: Packetizer,
@@ -163,13 +164,13 @@ impl TcpConnection {
 
         // interests will be set on the first packet received
         // set the initial value now so that they won't need to be updated
-        let interests = Ready::writable();
+        let interests = Interest::WRITABLE;
         let rc = Rc::new(RefCell::new(Self {
             self_weak: Weak::new(),
             id,
             client,
             stream,
-            interests,
+            interests: Some(interests),
             token: Token(0), // default value, will be set afterwards
             client_to_network: StreamBuffer::new(4 * MAX_PACKET_LENGTH),
             network_to_client: packetizer,
@@ -188,15 +189,14 @@ impl TcpConnection {
             // must annotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token =
-                selector.register(&self_ref.stream, handler, interests, PollOpt::level())?;
+            let token = selector.register(&mut self_ref.stream, handler, interests)?;
             self_ref.token = token;
         }
         Ok(rc)
     }
 
     fn create_stream(id: &ConnectionId) -> io::Result<TcpStream> {
-        TcpStream::connect(&id.rewritten_destination().into())
+        TcpStream::connect(id.rewritten_destination().into())
     }
 
     fn remove_from_router(&self) {
@@ -219,24 +219,25 @@ impl TcpConnection {
     // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process(&mut self, selector: &mut Selector, event: Event) -> io::Result<()> {
         if !self.closed {
-            let ready = event.readiness();
-            if ready.is_readable() || ready.is_writable() {
-                if ready.is_writable() {
+            let readable = event.is_readable();
+            let writable = event.is_writable();
+            if readable || writable {
+                if writable {
                     if self.tcb.state == TcpState::SynSent {
                         // writable is first triggered when the stream is connected
                         self.process_connect(selector);
-                    } else {
+                    } else if self.may_write() {
                         self.process_send(selector)?;
                     }
                 }
-                if !self.closed && ready.is_readable() {
+                if !self.closed && readable && self.may_read() {
                     self.process_receive(selector)?;
                 }
                 if !self.closed {
                     self.update_interests(selector);
                 }
             } else {
-                cx_debug!(target: TAG, self.id, "received ready = {:?}", ready);
+                cx_debug!(target: TAG, self.id, "received closed or error event");
                 // error or hup
                 self.close(selector);
             }
@@ -248,11 +249,16 @@ impl TcpConnection {
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_send(&mut self, selector: &mut Selector) -> io::Result<()> {
-        match self.client_to_network.write_to(&mut self.stream) {
-            Ok(w) => {
-                if w != 0 {
+        while !self.client_to_network.is_empty() {
+            match self.client_to_network.write_to(&mut self.stream) {
+                Ok(0) => {
+                    cx_error!(target: TAG, self.id, "Cannot write buffered data");
+                    self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
+                    self.close(selector);
+                    break;
+                }
+                Ok(w) => {
                     self.tcb.acknowledgement_number += Wrapping(w as u32);
 
                     if self.tcb.fin_received && self.client_to_network.is_empty() {
@@ -264,100 +270,91 @@ impl TcpConnection {
                             "No more pending data, process the pending FIN"
                         );
                         self.do_handle_fin(selector, &mut client.channel());
-                    } else {
-                        cx_debug!(
-                            target: TAG,
-                            self.id,
-                            "Sending ACK {} to client",
-                            self.tcb.numbers()
-                        );
-                        self.send_empty_packet_to_client(selector, tcp_header::FLAG_ACK);
+                        break;
                     }
-                } else {
+                    cx_debug!(
+                        target: TAG,
+                        self.id,
+                        "Sending ACK {} to client",
+                        self.tcb.numbers()
+                    );
+                    self.send_empty_packet_to_client(selector, tcp_header::FLAG_ACK);
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    cx_error!(
+                        target: TAG,
+                        self.id,
+                        "Cannot write: [{:?}] {}",
+                        err.kind(),
+                        err
+                    );
+                    self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
                     self.close(selector);
+                    break;
                 }
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    // rethrow
-                    return Err(err);
-                }
-                cx_error!(
-                    target: TAG,
-                    self.id,
-                    "Cannot write: [{:?}] {}",
-                    err.kind(),
-                    err
-                );
-                self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
-                self.close(selector);
             }
         }
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_receive(&mut self, selector: &mut Selector) -> io::Result<()> {
-        assert!(
-            self.packet_for_client_length.is_none(),
-            "A pending packet was not sent"
-        );
-        let remaining_client_window = self.tcb.remaining_client_window();
-        assert!(
-            remaining_client_window > 0,
-            "process_received() must not be called when window == 0"
-        );
-        let max_payload_length =
-            Some(cmp::min(remaining_client_window, MAX_PAYLOAD_LENGTH) as usize);
-        Self::update_headers(
-            &mut self.network_to_client,
-            &self.tcb,
-            tcp_header::FLAG_ACK | tcp_header::FLAG_PSH,
-        );
-        match self
-            .network_to_client
-            .packetize_read(&mut self.stream, max_payload_length)
-        {
-            Ok(Some(ipv4_packet)) => {
-                match Self::send_to_client(&self.client, selector, &ipv4_packet) {
-                    Ok(_) => {
-                        let len = ipv4_packet.payload().unwrap().len();
-                        cx_debug!(
-                            target: TAG,
-                            self.id,
-                            "Packet ({} bytes) sent to client {}",
-                            len,
-                            self.tcb.numbers()
-                        );
-                        self.tcb.sequence_number += Wrapping(len as u32);
+        while self.may_read() {
+            let remaining_client_window = self.tcb.remaining_client_window();
+            let max_payload_length =
+                Some(cmp::min(remaining_client_window, MAX_PAYLOAD_LENGTH) as usize);
+            Self::update_headers(
+                &mut self.network_to_client,
+                &self.tcb,
+                tcp_header::FLAG_ACK | tcp_header::FLAG_PSH,
+            );
+            match self
+                .network_to_client
+                .packetize_read(&mut self.stream, max_payload_length)
+            {
+                Ok(Some(ipv4_packet)) => {
+                    let len = ipv4_packet.payload().unwrap().len();
+                    let packet_length = ipv4_packet.length();
+                    match Self::send_to_client(&self.client, selector, &ipv4_packet) {
+                        Ok(_) => {
+                            cx_debug!(
+                                target: TAG,
+                                self.id,
+                                "Packet ({} bytes) sent to client {}",
+                                len,
+                                self.tcb.numbers()
+                            );
+                            self.tcb.sequence_number += Wrapping(len as u32);
+                        }
+                        Err(_) => {
+                            // ask to the client to pull when its buffer is not full
+                            let client_rc =
+                                self.client.upgrade().expect("Expected client not found");
+                            let mut client = client_rc.borrow_mut();
+                            let self_rc = self.self_weak.upgrade().unwrap();
+                            client.register_pending_packet_source(self_rc);
+                            self.packet_for_client_length = Some(packet_length);
+                            break;
+                        }
                     }
-                    Err(_) => {
-                        // ask to the client to pull when its buffer is not full
-                        let client_rc = self.client.upgrade().expect("Expected client not found");
-                        let mut client = client_rc.borrow_mut();
-                        let self_rc = self.self_weak.upgrade().unwrap();
-                        client.register_pending_packet_source(self_rc);
-                        self.packet_for_client_length = Some(ipv4_packet.length());
-                    }
-                };
-            }
-            Ok(None) => {
-                self.eof(selector);
-            }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    // rethrow
-                    return Err(err);
                 }
-                cx_error!(
-                    target: TAG,
-                    self.id,
-                    "Cannot read: [{:?}] {}",
-                    err.kind(),
-                    err
-                );
-                self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
-                self.close(selector);
+                Ok(None) => {
+                    self.eof(selector);
+                    break;
+                }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    cx_error!(
+                        target: TAG,
+                        self.id,
+                        "Cannot read: [{:?}] {}",
+                        err.kind(),
+                        err
+                    );
+                    self.send_empty_packet_to_client(selector, tcp_header::FLAG_RST);
+                    self.close(selector);
+                    break;
+                }
             }
         }
         Ok(())
@@ -378,7 +375,7 @@ impl TcpConnection {
     ) -> io::Result<()> {
         let client_rc = client.upgrade().expect("Expected client not found");
         let mut client = client_rc.borrow_mut();
-        client.send_to_client(selector, &ipv4_packet)
+        client.send_to_client(selector, ipv4_packet)
     }
 
     /// Borrow self.client and send empty packet to it
@@ -528,11 +525,11 @@ impl TcpConnection {
             self.handle_fin(selector, client_channel);
         }
 
-        if let Some(fin_sequence_number) = self.tcb.fin_sequence_number {
-            if tcp_header.acknowledgement_number() == fin_sequence_number + 1 {
-                cx_debug!(target: TAG, self.id, "Received ACK of FIN");
-                self.handle_fin_ack(selector);
-            }
+        if let Some(fin_sequence_number) = self.tcb.fin_sequence_number
+            && tcp_header.acknowledgement_number() == fin_sequence_number + 1
+        {
+            cx_debug!(target: TAG, self.id, "Received ACK of FIN");
+            self.handle_fin_ack(selector);
         }
     }
 
@@ -549,7 +546,8 @@ impl TcpConnection {
             self.tcb.acknowledgement_number = Wrapping(their_sequence_number) + Wrapping(1);
             self.tcb.syn_sequence_number = their_sequence_number;
 
-            self.tcb.sequence_number = Wrapping(random::<u32>());
+            self.tcb.sequence_number =
+                Wrapping(getrandom::u32().expect("failed to obtain random TCP sequence number"));
             cx_debug!(
                 target: TAG,
                 self.id,
@@ -627,8 +625,8 @@ impl TcpConnection {
             );
             self.tcb.fin_sequence_number = Some(self.tcb.sequence_number.0);
             self.tcb.sequence_number += Wrapping(1); // FIN counts for 1 byte
-                                                     // the connection will be closed by RAII, so switch immediately to LastAck
-                                                     // (bypass CloseWait)
+            // the connection will be closed by RAII, so switch immediately to LastAck
+            // (bypass CloseWait)
             self.tcb.state = TcpState::LastAck;
             cx_debug!(target: TAG, self.id, "State = {:?}", self.tcb.state);
         } else if self.tcb.state == TcpState::FinWait1 {
@@ -677,7 +675,7 @@ impl TcpConnection {
             return;
         }
 
-        if log_enabled!(target: TAG, Level::Trace) {
+        if logger::is_enabled(LevelFilter::Trace) {
             cx_trace!(
                 target: TAG,
                 self.id,
@@ -719,7 +717,7 @@ impl TcpConnection {
             cx_debug!(target: TAG, id, "Acking {}", tcb.numbers());
         }
         let ipv4_packet = packetizer.packetize_empty_payload();
-        if log_enabled!(target: TAG, Level::Trace) {
+        if logger::is_enabled(LevelFilter::Trace) {
             cx_trace!(
                 target: TAG,
                 id,
@@ -732,25 +730,46 @@ impl TcpConnection {
 
     fn update_interests(&mut self, selector: &mut Selector) {
         assert!(!self.closed);
-        let mut ready = Ready::empty();
-        if self.tcb.state == TcpState::SynSent {
+        let interest = if self.tcb.state == TcpState::SynSent {
             // waiting for connectable
-            ready = Ready::writable()
+            Some(Interest::WRITABLE)
         } else {
+            let mut interest = None;
             if self.may_read() {
-                ready |= Ready::readable()
+                interest = Some(Interest::READABLE);
             }
             if self.may_write() {
-                ready |= Ready::writable()
+                interest = Some(match interest {
+                    Some(interest) => interest | Interest::WRITABLE,
+                    None => Interest::WRITABLE,
+                });
             }
-        }
-        cx_debug!(target: TAG, self.id, "interests: {:?}", ready);
-        if self.interests != ready {
+            interest
+        };
+        cx_debug!(target: TAG, self.id, "interests: {:?}", interest);
+        if self.interests != interest {
             // interests must be changed
-            self.interests = ready;
-            selector
-                .reregister(&self.stream, self.token, ready, PollOpt::level())
-                .expect("Cannot register on poll");
+            match interest {
+                Some(interest) => {
+                    if self.interests.is_some() {
+                        selector
+                            .reregister(&mut self.stream, self.token, interest)
+                            .expect("Cannot register on poll");
+                    } else {
+                        selector
+                            .register_existing(&mut self.stream, self.token, interest)
+                            .expect("Cannot register on poll");
+                    }
+                }
+                None => {
+                    if self.interests.is_some() {
+                        selector
+                            .suspend(&mut self.stream)
+                            .expect("Cannot suspend on poll");
+                    }
+                }
+            }
+            self.interests = interest;
         }
     }
 
@@ -790,16 +809,21 @@ impl Connection for TcpConnection {
     fn close(&mut self, selector: &mut Selector) {
         cx_info!(target: TAG, self.id, "Close");
         self.closed = true;
-        if let Err(err) = selector.deregister(&self.stream, self.token) {
-            // do not panic, this can happen in mio
-            // see <https://github.com/Genymobile/gnirehtet/issues/136>
-            cx_warn!(
-                target: TAG,
-                self.id,
-                "Fail to deregister TCP stream: {:?}",
-                err
-            );
+        if self.interests.is_some() {
+            if let Err(err) = selector.deregister(&mut self.stream, self.token) {
+                // do not panic, this can happen in mio
+                // see <https://github.com/Genymobile/gnirehtet/issues/136>
+                cx_warn!(
+                    target: TAG,
+                    self.id,
+                    "Fail to deregister TCP stream: {:?}",
+                    err
+                );
+            }
+        } else {
+            selector.remove(self.token);
         }
+        self.interests = None;
         // socket will be closed by RAII
     }
 
@@ -814,7 +838,7 @@ impl Connection for TcpConnection {
 }
 
 impl PacketSource for TcpConnection {
-    fn get(&mut self) -> Option<Ipv4Packet> {
+    fn get(&mut self) -> Option<Ipv4Packet<'_>> {
         if let Some(len) = self.packet_for_client_length {
             Some(self.network_to_client.inflate(len))
         } else {
@@ -835,6 +859,8 @@ impl PacketSource for TcpConnection {
         );
         self.tcb.sequence_number += Wrapping(u32::from(len));
         self.packet_for_client_length = None;
-        self.update_interests(selector);
+        if !self.closed {
+            self.update_interests(selector);
+        }
     }
 }

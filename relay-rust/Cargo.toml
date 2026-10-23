@@ -1,21 +1,33 @@
 [package]
 name = "gnirehtet"
-version = "2.5.1"
-authors = ["Romain Vimont <rom@rom1v.com>"]
-edition = "2018"
-
-[lib]
-name = "relaylib"
-path = "src/lib.rs"
+version = "2.6.0"
+authors = [
+  "Romain Vimont <rom@rom1v.com>",
+  "David MANZI <manzidavid093@gmail.com>",  # simply active maintainer
+]
+edition = "2024"
 
 [dependencies]
-mio = "0.6"       # for async I/O
-slab = "0.4"      # helper for mio Tokens
-log = "0.4"       # for logs
-chrono = "0.4"    # for formatting timestamp in logs
-byteorder = "1.3" # for reading/writing binary
-rand = "0.7"      # for random TCP sequence number
-ctrlc = { version = "3.0", features = ["termination"] }     # for handling Ctrl+C
+# for atomic log level filter
+atomic_enum = { version = "0.3.0", default-features = false }
+
+# for formatting timestamp in logs
+chrono = { version = "0.4.45", default-features = false, features = ["clock"] } 
+
+# for command-line parsing
+clap = { version = "4.6.7", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "wrap_help"] } 
+
+# for handling Ctrl+C
+ctrlc = { version = "3.5.2", default-features = false, features = ["termination"] } 
+
+# for random TCP sequence number# for random TCP sequence number
+getrandom = { version = "0.4.3", default-features = false } 
+
+# for async I/O
+mio = { version = "1.2.4", default-features = false, features = ["net", "os-poll"] } 
+
+# helper for mio Tokens
+slab = { version = "0.4", default-features = false }
 
 [profile.release]
 lto = true     # link-time optimization

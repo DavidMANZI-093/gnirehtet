@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -61,7 +62,7 @@ impl<'a> Ipv4Packet<'a> {
         (&self.ipv4_header_data, self.transport_header_data.as_ref())
     }
 
-    pub fn headers(&self) -> (Ipv4Header, Option<TransportHeader>) {
+    pub fn headers(&self) -> (Ipv4Header<'_>, Option<TransportHeader<'_>>) {
         let transport_index = self.ipv4_header_data.header_length() as usize;
         if let Some(ref transport_header_data) = self.transport_header_data {
             let (ipv4_header_slice, transport_slice) = self.raw.split_at(transport_index);
@@ -86,14 +87,14 @@ impl<'a> Ipv4Packet<'a> {
 
     #[inline]
     #[allow(dead_code)]
-    pub fn ipv4_header(&self) -> Ipv4Header {
+    pub fn ipv4_header(&self) -> Ipv4Header<'_> {
         let slice = &self.raw[..self.ipv4_header_data.header_length() as usize];
         self.ipv4_header_data.bind(slice)
     }
 
     #[inline]
     #[allow(dead_code)]
-    pub fn ipv4_header_mut(&mut self) -> Ipv4HeaderMut {
+    pub fn ipv4_header_mut(&mut self) -> Ipv4HeaderMut<'_> {
         let slice = &mut self.raw[..self.ipv4_header_data.header_length() as usize];
         self.ipv4_header_data.bind_mut(slice)
     }
@@ -105,7 +106,7 @@ impl<'a> Ipv4Packet<'a> {
     }
 
     #[inline]
-    pub fn transport_header(&self) -> Option<TransportHeader> {
+    pub fn transport_header(&self) -> Option<TransportHeader<'_>> {
         if let Some(ref transport_header_data) = self.transport_header_data {
             let start = self.ipv4_header_data.header_length() as usize;
             let end = start + transport_header_data.header_length() as usize;
@@ -124,7 +125,7 @@ impl<'a> Ipv4Packet<'a> {
 
     #[inline]
     #[allow(dead_code)]
-    fn transport_header_mut(&mut self) -> Option<TransportHeaderMut> {
+    fn transport_header_mut(&mut self) -> Option<TransportHeaderMut<'_>> {
         if let Some(ref mut transport_header_data) = self.transport_header_data {
             let start = self.ipv4_header_data.header_length() as usize;
             let end = start + transport_header_data.header_length() as usize;
@@ -146,7 +147,7 @@ impl<'a> Ipv4Packet<'a> {
     ///  - the transport header (if any)
     ///  - the payload (if there is a transport at all)
     #[allow(dead_code)]
-    pub fn split(&self) -> (Ipv4Header, Option<(TransportHeader, &[u8])>) {
+    pub fn split(&self) -> (Ipv4Header<'_>, Option<(TransportHeader<'_>, &[u8])>) {
         let transport_index = self.ipv4_header_data.header_length() as usize;
         if let Some(ref transport_header_data) = self.transport_header_data {
             // payload_index is relative to transport
@@ -167,7 +168,12 @@ impl<'a> Ipv4Packet<'a> {
     ///  - the IP v4 header
     ///  - the transport header (if any)
     ///  - the payload (if there is a transport at all)
-    pub fn split_mut(&mut self) -> (Ipv4HeaderMut, Option<(TransportHeaderMut, &mut [u8])>) {
+    pub fn split_mut(
+        &mut self,
+    ) -> (
+        Ipv4HeaderMut<'_>,
+        Option<(TransportHeaderMut<'_>, &mut [u8])>,
+    ) {
         let transport_index = self.ipv4_header_data.header_length() as usize;
         if let Some(ref mut transport_header_data) = self.transport_header_data {
             // payload_index is relative to transport
@@ -226,28 +232,26 @@ impl<'a> Ipv4Packet<'a> {
 mod tests {
     use super::*;
     use crate::relay::ipv4_header::Protocol;
-    use byteorder::{BigEndian, WriteBytesExt};
 
     fn create_packet() -> Vec<u8> {
-        let mut raw = Vec::new();
-        raw.reserve(32);
+        let mut raw = Vec::with_capacity(32);
 
-        raw.write_u8(4u8 << 4 | 5).unwrap(); // version_and_ihl
-        raw.write_u8(0).unwrap(); //ToS
-        raw.write_u16::<BigEndian>(32).unwrap(); // total length 20 + 8 + 4
-        raw.write_u32::<BigEndian>(0).unwrap(); // id_flags_fragment_offset
-        raw.write_u8(0).unwrap(); // TTL
-        raw.write_u8(17).unwrap(); // protocol (UDP)
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
-        raw.write_u32::<BigEndian>(0x12345678).unwrap(); // source address
-        raw.write_u32::<BigEndian>(0x42424242).unwrap(); // destination address
+        raw.push(4u8 << 4 | 5); // version_and_ihl
+        raw.push(0); //ToS
+        raw.extend_from_slice(&(32u16).to_be_bytes()); // total length 20 + 8 + 4
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id_flags_fragment_offset
+        raw.push(0); // TTL
+        raw.push(17); // protocol (UDP)
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x12345678u32).to_be_bytes()); // source address
+        raw.extend_from_slice(&(0x42424242u32).to_be_bytes()); // destination address
 
-        raw.write_u16::<BigEndian>(1234).unwrap(); // source port
-        raw.write_u16::<BigEndian>(5678).unwrap(); // destination port
-        raw.write_u16::<BigEndian>(4).unwrap(); // length
-        raw.write_u16::<BigEndian>(0).unwrap(); // checksum
+        raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(4u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
 
-        raw.write_u32::<BigEndian>(0x11223344).unwrap(); // payload
+        raw.extend_from_slice(&(0x11223344u32).to_be_bytes()); // payload
 
         raw
     }
@@ -265,8 +269,7 @@ mod tests {
             assert_eq!(0x12345678, ipv4_header.source());
             assert_eq!(0x42424242, ipv4_header.destination());
 
-            if let Some(&TransportHeaderData::Udp(ref udp_header)) =
-                ipv4_packet.transport_header_data()
+            if let Some(TransportHeaderData::Udp(udp_header)) = ipv4_packet.transport_header_data()
             {
                 assert_eq!(1234, udp_header.source_port());
                 assert_eq!(5678, udp_header.destination_port());

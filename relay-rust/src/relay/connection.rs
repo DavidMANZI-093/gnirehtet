@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -107,30 +108,30 @@ macro_rules! cx_format {
 
 macro_rules! cx_trace {
     (target: $target:expr, $id:expr, $($arg:tt)*) => {
-        log::trace!(target: $target, "{}", cx_format!($id, $($arg)+))
+        $crate::trace!(target: $target, "{}", cx_format!($id, $($arg)+))
     }
 }
 
 macro_rules! cx_debug {
     (target: $target:expr, $id:expr, $($arg:tt)*) => {
-        log::debug!(target: $target, "{}", cx_format!($id, $($arg)+))
+        $crate::debug!(target: $target, "{}", cx_format!($id, $($arg)+))
     }
 }
 
 macro_rules! cx_info {
     (target: $target:expr, $id:expr, $($arg:tt)*) => {
-        log::info!(target: $target, "{}", cx_format!($id, $($arg)+))
+        $crate::info!(target: $target, "{}", cx_format!($id, $($arg)+))
     }
 }
 
 macro_rules! cx_warn {
     (target: $target:expr, $id:expr, $($arg:tt)*) => {
-        log::warn!(target: $target, "{}", cx_format!($id, $($arg)+))
+        $crate::warn!(target: $target, "{}", cx_format!($id, $($arg)+))
     }
 }
 
 macro_rules! cx_error {
     (target: $target:expr, $id:expr, $($arg:tt)*) => {
-        log::error!(target: $target, "{}", cx_format!($id, $($arg)+))
+        $crate::error!(target: $target, "{}", cx_format!($id, $($arg)+))
     }
 }

@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +15,10 @@
  * limitations under the License.
  */
 
-use log::*;
+use crate::{debug, error, info, warn};
+use mio::Interest;
+use mio::event::Event;
 use mio::net::TcpListener;
-use mio::{Event, PollOpt, Ready};
 use std::cell::RefCell;
 use std::io;
 use std::net::{Ipv4Addr, SocketAddr};
@@ -52,29 +54,30 @@ impl TunnelServer {
         // must anotate selector type: https://stackoverflow.com/a/44004103/1987178
         let handler =
             move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-        selector.register(
-            &rc.borrow().tcp_listener,
-            handler,
-            Ready::readable(),
-            PollOpt::edge(),
-        )?;
+        {
+            let mut server = rc.borrow_mut();
+            selector.register(&mut server.tcp_listener, handler, Interest::READABLE)?;
+        }
         Ok(rc)
     }
 
     fn start_socket(port: u16) -> io::Result<TcpListener> {
         let localhost = Ipv4Addr::new(127, 0, 0, 1).into();
         let addr = SocketAddr::new(localhost, port);
-        let server = TcpListener::bind(&addr)?;
+        let server = TcpListener::bind(addr)?;
         Ok(server)
     }
 
     fn on_ready(&mut self, selector: &mut Selector, _: Event) {
-        match self.accept_client(selector) {
-            Ok(_) => debug!(target: TAG, "New client accepted"),
-            Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => {
-                debug!(target: TAG, "Spurious event, ignoring");
+        loop {
+            match self.accept_client(selector) {
+                Ok(()) => debug!(target: TAG, "New client accepted"),
+                Err(ref err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    error!(target: TAG, "Cannot accept client: {}", err);
+                    break;
+                }
             }
-            Err(err) => error!(target: TAG, "Cannot accept client: {}", err),
         }
     }
 

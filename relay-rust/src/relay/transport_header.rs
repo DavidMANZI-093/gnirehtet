@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -16,7 +17,7 @@
 
 use super::ipv4_header::{Ipv4HeaderData, Protocol};
 use super::tcp_header::{TcpHeader, TcpHeaderData, TcpHeaderMut};
-use super::udp_header::{UdpHeader, UdpHeaderData, UdpHeaderMut, UDP_HEADER_LENGTH};
+use super::udp_header::{UDP_HEADER_LENGTH, UdpHeader, UdpHeaderData, UdpHeaderMut};
 
 pub enum TransportHeader<'a> {
     Tcp(TcpHeader<'a>),

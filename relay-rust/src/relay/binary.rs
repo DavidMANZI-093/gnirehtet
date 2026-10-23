@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,16 +15,29 @@
  * limitations under the License.
  */
 
-use byteorder::{BigEndian, ByteOrder};
 use std::cmp::min;
 use std::fmt::Write;
 
 const MAX_STRING_PACKET_SIZE: usize = 20;
 
+pub fn read_u16(data: &[u8]) -> u16 {
+    u16::from_be_bytes([data[0], data[1]])
+}
+
+pub fn read_u32(data: &[u8]) -> u32 {
+    u32::from_be_bytes([data[0], data[1], data[2], data[3]])
+}
+
+pub fn write_u16(data: &mut [u8], value: u16) {
+    data[..2].copy_from_slice(&value.to_be_bytes());
+}
+
+pub fn write_u32(data: &mut [u8], value: u32) {
+    data[..4].copy_from_slice(&value.to_be_bytes());
+}
+
 pub fn to_byte_array(value: u32) -> [u8; 4] {
-    let mut raw = [0u8; 4];
-    BigEndian::write_u32(&mut raw, value);
-    raw
+    value.to_be_bytes()
 }
 
 pub fn build_packet_string(data: &[u8]) -> String {

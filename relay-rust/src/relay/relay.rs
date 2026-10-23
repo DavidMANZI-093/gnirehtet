@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,21 +15,19 @@
  * limitations under the License.
  */
 
-use chrono::Local;
-use log::*;
+use crate::{debug, info};
 use mio::Events;
 use std::cell::RefCell;
-use std::cmp::max;
 use std::io;
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use super::selector::Selector;
 use super::tunnel_server::TunnelServer;
 use super::udp_connection::IDLE_TIMEOUT_SECONDS;
 
 const TAG: &str = "Relay";
-const CLEANING_INTERVAL_SECONDS: i64 = 60;
+const CLEANING_INTERVAL: Duration = Duration::from_secs(60);
 
 pub struct Relay {
     port: u16,
@@ -40,7 +39,7 @@ impl Relay {
     }
 
     pub fn run(&self) -> io::Result<()> {
-        let mut selector = Selector::create().unwrap();
+        let mut selector = Selector::create()?;
         let tunnel_server = TunnelServer::create(self.port, &mut selector)?;
         info!(target: TAG, "Relay server started");
         self.poll_loop(&mut selector, &tunnel_server)
@@ -53,18 +52,18 @@ impl Relay {
     ) -> io::Result<()> {
         let mut events = Events::with_capacity(1024);
         // no connection may expire before the UDP idle timeout delay
-        let mut next_cleaning_deadline = Local::now().timestamp() + IDLE_TIMEOUT_SECONDS as i64;
+        let mut next_cleaning_deadline = Instant::now() + Duration::from_secs(IDLE_TIMEOUT_SECONDS);
         loop {
             retry_on_intr!({
-                let timeout_seconds = max(0, next_cleaning_deadline - Local::now().timestamp());
-                let timeout = Some(Duration::new(timeout_seconds as u64, 0));
+                let timeout =
+                    Some(next_cleaning_deadline.saturating_duration_since(Instant::now()));
                 selector.poll(&mut events, timeout)
             })?;
 
-            let now = Local::now().timestamp();
+            let now = Instant::now();
             if now >= next_cleaning_deadline {
                 tunnel_server.borrow_mut().clean_up(selector);
-                next_cleaning_deadline = now + CLEANING_INTERVAL_SECONDS;
+                next_cleaning_deadline = now + CLEANING_INTERVAL;
             } else if events.is_empty() {
                 debug!(
                     target: TAG,

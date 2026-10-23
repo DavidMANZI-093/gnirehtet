@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,9 +15,10 @@
  * limitations under the License.
  */
 
-use log::*;
+use crate::{debug, error, warn};
+use mio::event::Event;
 use mio::net::TcpStream;
-use mio::{Event, PollOpt, Ready, Token};
+use mio::{Interest, Token};
 use std::cell::RefCell;
 use std::io::{self, Write};
 use std::mem;
@@ -37,7 +39,7 @@ const TAG: &str = "Client";
 pub struct Client {
     id: u32,
     stream: TcpStream,
-    interests: Ready,
+    interests: Interest,
     token: Token,
     client_to_network: Ipv4PacketBuffer,
     network_to_client: StreamBuffer,
@@ -52,17 +54,17 @@ pub struct Client {
 /// Channel for connections to send back data immediately to the client
 pub struct ClientChannel<'a> {
     network_to_client: &'a mut StreamBuffer,
-    stream: &'a TcpStream,
+    stream: &'a mut TcpStream,
     token: Token,
-    interests: &'a mut Ready,
+    interests: &'a mut Interest,
 }
 
 impl<'a> ClientChannel<'a> {
     fn new(
         network_to_client: &'a mut StreamBuffer,
-        stream: &'a TcpStream,
+        stream: &'a mut TcpStream,
         token: Token,
-        interests: &'a mut Ready,
+        interests: &'a mut Interest,
     ) -> Self {
         Self {
             network_to_client,
@@ -93,16 +95,16 @@ impl<'a> ClientChannel<'a> {
     }
 
     fn update_interests(&mut self, selector: &mut Selector) {
-        let ready = if self.network_to_client.is_empty() {
-            Ready::readable()
+        let interest = if self.network_to_client.is_empty() {
+            Interest::READABLE
         } else {
-            Ready::readable() | Ready::writable()
+            Interest::READABLE | Interest::WRITABLE
         };
-        if *self.interests != ready {
+        if *self.interests != interest {
             // interests must be changed
-            *self.interests = ready;
+            *self.interests = interest;
             selector
-                .reregister(self.stream, self.token, ready, PollOpt::level())
+                .reregister(self.stream, self.token, interest)
                 .expect("Cannot register on poll");
         }
     }
@@ -116,7 +118,7 @@ impl Client {
         close_listener: Box<dyn CloseListener<Client>>,
     ) -> io::Result<Rc<RefCell<Self>>> {
         // on start, we are interested only in writing (we must first send the client id)
-        let interests = Ready::writable();
+        let interests = Interest::WRITABLE;
         let rc = Rc::new(RefCell::new(Self {
             id,
             stream,
@@ -140,8 +142,7 @@ impl Client {
             // must anotate selector type: https://stackoverflow.com/a/44004103/1987178
             let handler =
                 move |selector: &mut Selector, event| rc2.borrow_mut().on_ready(selector, event);
-            let token =
-                selector.register(&self_ref.stream, handler, interests, PollOpt::level())?;
+            let token = selector.register(&mut self_ref.stream, handler, interests)?;
             self_ref.token = token;
         }
         Ok(rc)
@@ -155,10 +156,10 @@ impl Client {
         &mut self.router
     }
 
-    pub fn channel(&mut self) -> ClientChannel {
+    pub fn channel(&mut self) -> ClientChannel<'_> {
         ClientChannel::new(
             &mut self.network_to_client,
-            &self.stream,
+            &mut self.stream,
             self.token,
             &mut self.interests,
         )
@@ -166,7 +167,7 @@ impl Client {
 
     fn close(&mut self, selector: &mut Selector) {
         self.closed = true;
-        selector.deregister(&self.stream, self.token).unwrap();
+        selector.deregister(&mut self.stream, self.token).unwrap();
         // shutdown only (there is no close), the socket will be closed on drop
         if self.stream.shutdown(Shutdown::Both).is_err() {
             warn!(target: TAG, "Cannot shutdown client socket");
@@ -186,68 +187,90 @@ impl Client {
         }
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process(&mut self, selector: &mut Selector, event: Event) -> io::Result<()> {
         if !self.closed {
-            let ready = event.readiness();
-            if ready.is_writable() {
-                self.process_send(selector)?;
-            }
-            if !self.closed && ready.is_readable() {
-                self.process_receive(selector)?;
-            }
-            if !self.closed {
-                self.update_interests(selector);
+            let readable = event.is_readable();
+            let writable = event.is_writable();
+            if readable || writable {
+                if writable {
+                    self.process_send(selector)?;
+                }
+                if !self.closed && readable {
+                    self.process_receive(selector)?;
+                }
+                if !self.closed {
+                    self.update_interests(selector);
+                }
+            } else {
+                self.close(selector);
             }
         }
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_send(&mut self, selector: &mut Selector) -> io::Result<()> {
-        if self.must_send_id() {
+        while self.must_send_id() {
             match self.send_id() {
-                Ok(_) => {
+                Ok(()) => {
                     if self.pending_id_bytes == 0 {
                         debug!(target: TAG, "Client id #{} sent to client", self.id);
                     }
                 }
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
                 Err(err) => {
-                    if err.kind() == io::ErrorKind::WouldBlock {
-                        // rethrow
-                        return Err(err);
-                    }
-                    error!(target: TAG, "Cannot write client id #{}", self.id);
+                    error!(
+                        target: TAG,
+                        "Cannot write client id #{}: [{:?}] {}",
+                        self.id,
+                        err.kind(),
+                        err
+                    );
                     self.close(selector);
+                    return Ok(());
                 }
             }
-        } else {
+        }
+
+        loop {
             match self.write() {
-                Ok(_) => self.process_pending(selector),
+                Ok(()) => {}
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(()),
                 Err(err) => {
                     error!(target: TAG, "Cannot write: [{:?}] {}", err.kind(), err);
                     self.close(selector);
+                    return Ok(());
                 }
+            }
+
+            if self.pending_packet_sources.is_empty() {
+                break;
+            }
+            self.process_pending(selector);
+            if self.network_to_client.is_empty() {
+                break;
             }
         }
         Ok(())
     }
 
-    // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process_receive(&mut self, selector: &mut Selector) -> io::Result<()> {
-        match self.read() {
-            Ok(true) => self.push_to_network(selector),
-            Ok(false) => {
-                debug!(target: TAG, "EOF reached");
-                self.close(selector);
+        loop {
+            if self.client_to_network.remaining() == 0 {
+                break;
             }
-            Err(err) => {
-                if err.kind() == io::ErrorKind::WouldBlock {
-                    // rethrow
-                    return Err(err);
+            match self.read() {
+                Ok(true) => self.push_to_network(selector),
+                Ok(false) => {
+                    debug!(target: TAG, "EOF reached");
+                    self.close(selector);
+                    break;
                 }
-                error!(target: TAG, "Cannot read: [{:?}] {}", err.kind(), err);
-                self.close(selector);
+                Err(err) if err.kind() == io::ErrorKind::WouldBlock => break,
+                Err(err) => {
+                    error!(target: TAG, "Cannot read: [{:?}] {}", err.kind(), err);
+                    self.close(selector);
+                    break;
+                }
             }
         }
         Ok(())
@@ -279,6 +302,12 @@ impl Client {
         assert!(self.must_send_id());
         let raw_id = binary::to_byte_array(self.id);
         let w = self.stream.write(&raw_id[4 - self.pending_id_bytes..])?;
+        if w == 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "Cannot write client id",
+            ));
+        }
         self.pending_id_bytes -= w;
         Ok(())
     }
@@ -292,7 +321,15 @@ impl Client {
     }
 
     fn write(&mut self) -> io::Result<()> {
-        self.network_to_client.write_to(&mut self.stream)?;
+        while !self.network_to_client.is_empty() {
+            let w = self.network_to_client.write_to(&mut self.stream)?;
+            if w == 0 {
+                return Err(io::Error::new(
+                    io::ErrorKind::WriteZero,
+                    "Cannot write buffered data",
+                ));
+            }
+        }
         Ok(())
     }
 
@@ -307,7 +344,7 @@ impl Client {
             Some(ref packet) => {
                 let mut client_channel = ClientChannel::new(
                     &mut self.network_to_client,
-                    &self.stream,
+                    &mut self.stream,
                     self.token,
                     &mut self.interests,
                 );

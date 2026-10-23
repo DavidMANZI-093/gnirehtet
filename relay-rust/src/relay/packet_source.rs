@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -27,6 +28,6 @@ use super::selector::Selector;
 ///
 /// It is implemented by `TcpConnection`.
 pub trait PacketSource {
-    fn get(&mut self) -> Option<Ipv4Packet>;
+    fn get(&mut self) -> Option<Ipv4Packet<'_>>;
     fn next(&mut self, selector: &mut Selector);
 }

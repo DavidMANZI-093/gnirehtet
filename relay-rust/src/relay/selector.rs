@@ -1,5 +1,6 @@
 /*
  * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,8 +15,9 @@
  * limitations under the License.
  */
 
-use log::*;
-use mio::{Event, Evented, Events, Poll, PollOpt, Ready, Token};
+use crate::debug;
+use mio::event::{Event, Source};
+use mio::{Events, Interest, Poll, Token};
 use slab::Slab;
 use std::io;
 use std::rc::Rc;
@@ -52,19 +54,18 @@ impl Selector {
         })
     }
 
-    pub fn register<E, H>(
+    pub fn register<S, H>(
         &mut self,
-        handle: &E,
+        source: &mut S,
         handler: H,
-        interest: Ready,
-        opts: PollOpt,
+        interest: Interest,
     ) -> io::Result<Token>
     where
-        E: Evented + ?Sized,
+        S: Source + ?Sized,
         H: EventHandler + 'static,
     {
         let token = Token(self.handlers.insert(Rc::new(handler)));
-        if let Err(err) = self.poll.register(handle, token, interest, opts) {
+        if let Err(err) = self.poll.registry().register(source, token, interest) {
             // remove the token we just added
             self.handlers.remove(token.0);
             Err(err)
@@ -73,27 +74,49 @@ impl Selector {
         }
     }
 
-    pub fn reregister<E>(
+    pub fn register_existing<S>(
         &mut self,
-        handle: &E,
+        source: &mut S,
         token: Token,
-        interest: Ready,
-        opts: PollOpt,
+        interest: Interest,
     ) -> io::Result<()>
     where
-        E: Evented + ?Sized,
+        S: Source + ?Sized,
     {
-        self.poll.reregister(handle, token, interest, opts)
+        self.poll.registry().register(source, token, interest)
     }
 
-    pub fn deregister<E>(&mut self, handle: &E, token: Token) -> io::Result<()>
+    pub fn reregister<S>(
+        &mut self,
+        source: &mut S,
+        token: Token,
+        interest: Interest,
+    ) -> io::Result<()>
     where
-        E: Evented + ?Sized,
+        S: Source + ?Sized,
     {
-        self.poll.deregister(handle)?;
-        // remove them before next poll()
-        self.tokens_to_remove.push(token);
+        self.poll.registry().reregister(source, token, interest)
+    }
+
+    pub fn suspend<S>(&mut self, source: &mut S) -> io::Result<()>
+    where
+        S: Source + ?Sized,
+    {
+        self.poll.registry().deregister(source)
+    }
+
+    pub fn deregister<S>(&mut self, source: &mut S, token: Token) -> io::Result<()>
+    where
+        S: Source + ?Sized,
+    {
+        self.poll.registry().deregister(source)?;
+        self.remove(token);
         Ok(())
+    }
+
+    pub fn remove(&mut self, token: Token) {
+        // remove it before next poll()
+        self.tokens_to_remove.push(token);
     }
 
     fn clean_removed_tokens(&mut self) {
@@ -103,7 +126,7 @@ impl Selector {
         self.tokens_to_remove.clear();
     }
 
-    pub fn poll(&mut self, events: &mut Events, timeout: Option<Duration>) -> io::Result<usize> {
+    pub fn poll(&mut self, events: &mut Events, timeout: Option<Duration>) -> io::Result<()> {
         self.poll.poll(events, timeout)
     }
 
@@ -115,7 +138,7 @@ impl Selector {
                 .get_mut(event.token().0)
                 .expect("Token not found")
                 .clone();
-            handler.on_ready(self, event);
+            handler.on_ready(self, event.clone());
         }
 
         // remove the tokens marked as removed
