@@ -30,4 +30,18 @@ mio = { version = "1.2.4", default-features = false, features = ["net", "os-poll
 slab = { version = "0.4", default-features = false }
 
 [profile.release]
-lto = true     # link-time optimization
+opt-level = "z"      # optimize for binary size (loop vecotirzation off)
+lto = "thin"         # link-time optimization - thin (less time)
+codegen-units = 1    # parallel codegenerating units (more may produce slower code)
+strip = "symbols"    # strip 'symbols' from binary
+debug = false        # no debug info in compiled binary
+panic = "unwind"     # unwind the stack upon panic
+
+[profile.dist]
+inherits = "release" 
+opt-level = "z"      # optimize for binary size (loop vecotirzation off)
+lto = "true"         # link-time optimization (fat - see, https://doc.rust-lang.org/cargo/reference/profiles.html#lto)
+codegen-units = 1    # parallel codegenerating units (more may produce slower code)
+strip = "symbols"    # strip 'symbols' from binary
+debug = false        # no debug info in compiled binary
+panic = "abort"      # terminate process upon panic
