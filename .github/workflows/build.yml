@@ -1,0 +1,269 @@
+name: build
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (for example, v2.6.0)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: prepare
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: read and verify version
+        id: version
+        env:
+          TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          test -f version.pin
+          version=$(sed -n 's/^VERSION=//p' version.pin | head -n1)
+          version_code=$(sed -n 's/^ANDROID_VERSION_CODE=//p' version.pin | head -n1)
+          cargo_version=$(sed -n 's/^version = "\(.*\)"/\1/p' relay-rust/Cargo.toml | head -n1)
+
+          test -n "$version"
+          test -n "$version_code"
+          case "$version_code" in
+            ''|*[!0-9]*) echo "invalid ANDROID_VERSION_CODE in version.pin" >&2; exit 1 ;;
+          esac
+          test "$version" = "$cargo_version" || {
+            echo "version.pin VERSION ($version) does not match Cargo.toml version ($cargo_version)" >&2
+            exit 1
+          }
+          test "$TAG" = "v$version" || {
+            echo "tag $TAG does not match version.pin VERSION ($version)" >&2
+            exit 1
+          }
+
+          if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
+            git rev-parse --verify "refs/tags/$TAG" >/dev/null
+          fi
+
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+  android:
+    name: android apk
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: install java
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: install android sdk
+        uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - name: build release apk
+        env:
+          RELEASE_KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          RELEASE_KEY_PASS: ${{ secrets.RELEASE_KEY_PASS }}
+          RELEASE_KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+        run: make app-release
+
+      - name: upload apk
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: android-apk
+          path: app/build/gnirehtet-release.apk
+          if-no-files-found: error
+          retention-days: 1
+
+  rust:
+    name: rust ${{ matrix.name }}
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux64
+            runner: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary: gnirehtet
+          - name: win64
+            runner: ubuntu-latest
+            target: x86_64-pc-windows-gnu
+            binary: gnirehtet.exe
+          - name: macos-x64
+            runner: macos-26-intel
+            target: x86_64-apple-darwin
+            binary: gnirehtet
+          - name: macos-arm64
+            runner: macos-26
+            target: aarch64-apple-darwin
+            binary: gnirehtet
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+
+      - name: install linux build dependencies
+        if: matrix.target == 'x86_64-unknown-linux-musl'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y musl-tools
+
+      - name: install mingw build dependencies
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-mingw-w64-x86-64
+
+      - name: install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: cache rust
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: relay-rust -> target
+          key: ${{ matrix.target }}
+
+      - name: build
+        working-directory: relay-rust
+        env:
+          RUSTFLAGS: ${{ matrix.target == 'x86_64-pc-windows-gnu' && '-C target-feature=+crt-static' || '' }}
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_LINKER: ${{ matrix.target == 'x86_64-pc-windows-gnu' && 'x86_64-w64-mingw32-gcc' || '' }}
+          CARGO_TARGET_X86_64_PC_WINDOWS_GNU_AR: ${{ matrix.target == 'x86_64-pc-windows-gnu' && 'x86_64-w64-mingw32-gcc-ar' || '' }}
+        run: cargo build --profile dist --locked --no-default-features --target "${{ matrix.target }}"
+
+      - name: verify windows runtime imports
+        if: matrix.target == 'x86_64-pc-windows-gnu'
+        working-directory: relay-rust
+        run: |
+          set -euo pipefail
+          exe="target/${{ matrix.target }}/dist/${{ matrix.binary }}"
+          imports=$(x86_64-w64-mingw32-objdump -p "$exe" | sed -n 's/^[[:space:]]*DLL Name: //p')
+          printf '%s\n' "$imports"
+          if printf '%s\n' "$imports" | grep -Eiq 'vcruntime|msvcp|libgcc_s|libwinpthread'; then
+            echo "Forbidden Windows runtime dependency found" >&2
+            exit 1
+          fi
+
+      - name: upload binary
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: relay-${{ matrix.name }}
+          path: relay-rust/target/${{ matrix.target }}/dist/${{ matrix.binary }}
+          if-no-files-found: error
+          retention-days: 1
+
+  bundle:
+    name: package and draft release
+    needs:
+      - prepare
+      - android
+      - rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: write
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          ref: ${{ needs.prepare.outputs.tag }}
+          fetch-depth: 0
+
+      - name: download artifacts
+        uses: actions/download-artifact@v8.0.2
+        with:
+          path: artifacts
+
+      - name: create flat archives
+        env:
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          make_stage() {
+            name="$1"
+            stage="dist/stage/$name"
+            mkdir -p "$stage"
+            cp "artifacts/android-apk/gnirehtet-release.apk" "$stage/gnirehtet.apk"
+            cp LICENSE "$stage/LICENSE"
+          }
+
+          make_stage linux64
+          cp artifacts/relay-linux64/gnirehtet dist/stage/linux64/gnirehtet
+          chmod +x dist/stage/linux64/gnirehtet
+          (cd dist/stage/linux64 && zip -9 -j "../../gnirehtet-linux64-v${VERSION}.zip" ./*)
+
+          make_stage win64
+          cp artifacts/relay-win64/gnirehtet.exe dist/stage/win64/gnirehtet.exe
+          cp relay-rust/scripts/gnirehtet-run.cmd dist/stage/win64/gnirehtet-run.cmd
+          (cd dist/stage/win64 && zip -9 -j "../../gnirehtet-win64-v${VERSION}.zip" ./*)
+
+          make_stage macos-x64
+          cp artifacts/relay-macos-x64/gnirehtet dist/stage/macos-x64/gnirehtet
+          chmod +x dist/stage/macos-x64/gnirehtet
+          (cd dist/stage/macos-x64 && zip -9 -j "../../gnirehtet-macos-x64-v${VERSION}.zip" ./*)
+
+          make_stage macos-arm64
+          cp artifacts/relay-macos-arm64/gnirehtet dist/stage/macos-arm64/gnirehtet
+          chmod +x dist/stage/macos-arm64/gnirehtet
+          (cd dist/stage/macos-arm64 && zip -9 -j "../../gnirehtet-macos-arm64-v${VERSION}.zip" ./*)
+
+          for archive in dist/*.zip; do
+            if unzip -Z1 "$archive" | grep -q '/'; then
+              echo "nested path found in $archive" >&2
+              exit 1
+            fi
+          done
+
+          (cd dist && sha256sum ./*.zip > SHA256SUMS)
+
+      - name: create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+        run: |
+          set -euo pipefail
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS --clobber
+          else
+            gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
+              --verify-tag \
+              --draft \
+              --title "Gnirehtet ${VERSION} (d3fault fork)" \
+              --generate-notes
+          fi

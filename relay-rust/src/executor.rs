@@ -36,7 +36,7 @@ const PACKAGE: &str = "d3fault.gnirehtet";
 const ACTIVITY: &str = "d3fault.gnirehtet/.GnirehtetActivity";
 const ACTION_START: &str = "d3fault.gnirehtet.START";
 const ACTION_STOP: &str = "d3fault.gnirehtet.STOP";
-const REQUIRED_APK_VERSION_CODE: &str = "9";
+const REQUIRED_APK_VERSION_CODE: &str = env!("GNIREHTET_ANDROID_VERSION_CODE");
 
 impl Command {
     pub fn execute(self) -> Result<(), ExecutionError> {

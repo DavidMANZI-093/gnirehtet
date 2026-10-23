@@ -1,0 +1,3 @@
+# Shared by the Android app and Rust relay.
+VERSION=2.6.0
+ANDROID_VERSION_CODE=10

@@ -40,7 +40,7 @@ panic = "unwind"     # unwind the stack upon panic
 [profile.dist]
 inherits = "release" 
 opt-level = "z"      # optimize for binary size (loop vecotirzation off)
-lto = "true"         # link-time optimization (fat - see, https://doc.rust-lang.org/cargo/reference/profiles.html#lto)
+lto = "fat"          # link-time optimization (fat - see, https://doc.rust-lang.org/cargo/reference/profiles.html#lto)
 codegen-units = 1    # parallel codegenerating units (more may produce slower code)
 strip = "symbols"    # strip 'symbols' from binary
 debug = false        # no debug info in compiled binary

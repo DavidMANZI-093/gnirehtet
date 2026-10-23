@@ -1,0 +1,113 @@
+name: check
+
+on:
+  pull_request:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  changes:
+    name: detect changes
+    runs-on: ubuntu-latest
+    outputs:
+      rust: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.rust }}
+      java: ${{ github.event_name == 'workflow_dispatch' && 'true' || steps.filter.outputs.java }}
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: filter changed paths
+        id: filter
+        if: github.event_name != 'workflow_dispatch'
+        uses: dorny/paths-filter@v4.0.3
+        with:
+          filters: |
+            rust:
+              - 'relay-rust/**'
+              - 'version.pin'
+              - 'Makefile'
+              - '.github/workflows/check.yml'
+              - '.github/workflows/build.yml'
+            java:
+              - 'app/**'
+              - 'version.pin'
+              - 'Makefile'
+              - '.github/workflows/check.yml'
+              - '.github/workflows/build.yml'
+
+  rust:
+    name: rust
+    needs: changes
+    if: needs.changes.outputs.rust == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: relay-rust
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: install rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+
+      - name: cache rust
+        uses: Swatinem/rust-cache@v2.9.3
+        with:
+          workspaces: relay-rust -> target
+
+      - name: check formatting
+        id: fmt
+        continue-on-error: true
+        run: cargo fmt --all -- --check
+
+      - name: warn about formatting
+        if: steps.fmt.outcome == 'failure'
+        run: echo "::warning title=Rust formatting::cargo fmt --check found differences; run 'cargo fmt' locally."
+
+      - name: check
+        run: cargo check --locked --no-default-features
+
+      - name: test
+        run: cargo test --locked --no-default-features
+
+  java:
+    name: java
+    needs: changes
+    if: needs.changes.outputs.java == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: checkout
+        uses: actions/checkout@v7.0.1
+
+      - name: install Java
+        uses: actions/setup-java@v6.1.0
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - name: install android sdk
+        uses: android-actions/setup-android@v4.0.4
+        with:
+          packages: "platforms;android-36 build-tools;36.0.0"
+
+      - name: test
+        run: make app-test
+
+      - name: lint
+        run: make app-lint

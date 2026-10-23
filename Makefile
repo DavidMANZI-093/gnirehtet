@@ -59,8 +59,9 @@ ACTIVITY     := $(PKG)/.GnirehtetActivity
 START_ACTION := $(PKG).START
 STOP_ACTION  := $(PKG).STOP
 
-VERSION_CODE ?= 9
-VERSION_NAME ?= 2.5.1
+VERSION_PIN  ?= version.pin
+VERSION_NAME ?= $(shell sed -n 's/^VERSION=//p' "$(VERSION_PIN)" 2>/dev/null | head -n1)
+VERSION_CODE ?= $(shell sed -n 's/^ANDROID_VERSION_CODE=//p' "$(VERSION_PIN)" 2>/dev/null | head -n1)
 MIN_SDK      ?= 21
 PORT         ?= 31416
 
@@ -128,8 +129,8 @@ endef
 
 # $(1) value of BuildConfig.DEBUG
 define write-buildconfig
-	printf 'package %s;\n\npublic final class BuildConfig {\n    public static final boolean DEBUG = %s;\n\n    private BuildConfig() {\n    }\n}\n' \
-		'$(PKG)' '$(1)' > $(BUILD_CONFIG)
+	printf 'package %s;\n\npublic final class BuildConfig {\n    public static final boolean DEBUG = %s;\n    public static final String VERSION_NAME = "%s";\n    public static final int VERSION_CODE = %s;\n\n    private BuildConfig() {\n    }\n}\n' \
+		'$(PKG)' '$(1)' '$(VERSION_NAME)' '$(VERSION_CODE)' > $(BUILD_CONFIG)
 endef
 
 # $(1) --debug-mode or empty, $(2) BuildConfig.DEBUG, $(3) extra d8 flags,
@@ -198,6 +199,9 @@ app-release: app-check release-check
 	$(call run-build,,false,--release,$(APK_RELEASE),$(RELEASE_KEYSTORE),RELEASE_KEY_PASS,$(RELEASE_KEY_ALIAS))
 
 app-check:
+	@test -f "$(VERSION_PIN)" || { echo "missing: $(VERSION_PIN)"; exit 1; }
+	@test -n "$(VERSION_NAME)" || { echo "missing VERSION in $(VERSION_PIN)"; exit 1; }
+	@case "$(VERSION_CODE)" in ''|*[!0-9]*) echo "invalid ANDROID_VERSION_CODE in $(VERSION_PIN)"; exit 1;; esac
 	@if [ -z "$(SDK)" ]; then \
 		echo "SDK is not set."; \
 		echo "  export ANDROID_HOME=\"$$HOME/android-sdk\"   # or ANDROID_SDK_ROOT"; \
@@ -234,7 +238,11 @@ release-keystore:
 		command -v base64 >/dev/null || { echo "missing in PATH: base64"; exit 1; }; \
 		umask 077; \
 		mkdir -p "$(dir $(RELEASE_KEYSTORE))"; \
-		printf '%s' "$$RELEASE_KEYSTORE_BASE64" | base64 -d > "$(RELEASE_KEYSTORE)"; \
+		if ! printf '%s' "$$RELEASE_KEYSTORE_BASE64" | tr -d '[:space:]' | tr '_-' '/+' | base64 -d > "$(RELEASE_KEYSTORE)"; then \
+			rm -f "$(RELEASE_KEYSTORE)"; \
+			echo "RELEASE_KEYSTORE_BASE64 is not valid base64" >&2; \
+			exit 1; \
+		fi; \
 	fi
 	@test -f "$(RELEASE_KEYSTORE)" || { echo "missing release keystore: $(RELEASE_KEYSTORE)"; \
 		echo "  set RELEASE_KEYSTORE_BASE64 (CI) or RELEASE_KEYSTORE (local)"; exit 1; }
