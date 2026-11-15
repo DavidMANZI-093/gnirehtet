@@ -16,7 +16,7 @@
 
 use super::binary;
 use super::byte_buffer::ByteBuffer;
-use super::ip_packet::{peek_version_length, IpPacket, MAX_IP_PACKET_LENGTH};
+use super::ip_packet::{IpPacket, MAX_IP_PACKET_LENGTH, peek_version_length};
 use super::ipv4_packet::Ipv4Packet;
 use super::ipv6_packet::Ipv6Packet;
 
@@ -118,9 +118,7 @@ mod tests {
         raw.push(17);
         raw.push(64);
         raw.extend_from_slice(&[0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
-        raw.extend_from_slice(&[
-            0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-        ]);
+        raw.extend_from_slice(&[0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
         raw.extend_from_slice(&(1234u16).to_be_bytes());
         raw.extend_from_slice(&(5678u16).to_be_bytes());
         raw.extend_from_slice(&(12u16).to_be_bytes());

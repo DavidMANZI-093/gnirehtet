@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-use super::ipv6_header::{Ipv6Header, Ipv6HeaderData, Ipv6HeaderMut, IPV6_HEADER_LENGTH};
+use super::ipv6_header::{IPV6_HEADER_LENGTH, Ipv6Header, Ipv6HeaderData, Ipv6HeaderMut};
 use super::transport_header::{TransportHeader, TransportHeaderData, TransportHeaderMut};
 
 pub struct Ipv6Packet<'a> {
@@ -91,6 +91,7 @@ impl<'a> Ipv6Packet<'a> {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn transport_header_data(&self) -> Option<&TransportHeaderData> {
         self.transport_header_data.as_ref()
     }
@@ -192,9 +193,7 @@ mod tests {
         raw.push(17); // UDP
         raw.push(64); // hop limit
         raw.extend_from_slice(&[0xfd, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 2]);
-        raw.extend_from_slice(&[
-            0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
-        ]);
+        raw.extend_from_slice(&[0x20, 1, 0x0d, 0xb8, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1]);
 
         raw.extend_from_slice(&(1234u16).to_be_bytes());
         raw.extend_from_slice(&(5678u16).to_be_bytes());

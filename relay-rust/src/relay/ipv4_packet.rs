@@ -18,8 +18,6 @@
 use super::ipv4_header::{Ipv4Header, Ipv4HeaderData, Ipv4HeaderMut};
 use super::transport_header::{TransportHeader, TransportHeaderData, TransportHeaderMut};
 
-pub const MAX_PACKET_LENGTH: usize = 1 << 16;
-
 pub struct Ipv4Packet<'a> {
     raw: &'a mut [u8],
     ipv4_header_data: Ipv4HeaderData,

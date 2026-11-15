@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::net::{Ipv4Addr, SocketAddrV4};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4};
 
 pub fn to_addr(ipv4: u32) -> Ipv4Addr {
     Ipv4Addr::from(ipv4)
@@ -24,4 +24,12 @@ pub fn to_addr(ipv4: u32) -> Ipv4Addr {
 pub fn to_socket_addr(ipv4: u32, port: u16) -> SocketAddrV4 {
     let addr = to_addr(ipv4);
     SocketAddrV4::new(addr, port)
+}
+
+pub fn to_ipv6_addr(raw: &[u8; 16]) -> Ipv6Addr {
+    Ipv6Addr::from(*raw)
+}
+
+pub fn to_socket_addr_ip(ip: IpAddr, port: u16) -> SocketAddr {
+    SocketAddr::new(ip, port)
 }

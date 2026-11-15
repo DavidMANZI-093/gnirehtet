@@ -51,6 +51,7 @@ impl<'a> IpPacket<'a> {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn version(&self) -> u8 {
         match *self {
             IpPacket::V4(_) => 4,
