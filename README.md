@@ -5,8 +5,10 @@ allows devices to use the internet connection of the computer they are plugged
 on. It does not require any _root_ access (neither on the device nor on the
 computer). It works on _GNU/Linux_, _Windows_ and _macOS_.
 
-Currently, it relays [TCP] and [UDP] over [IPv4] traffic. [IPv6] support is
-being worked on.
+It relays [TCP] and [UDP] over both [IPv4] and [IPv6] traffic. For IPv6, the
+device is assigned the ULA address `fd00::2` (alongside `10.0.0.2` for IPv4)
+and the relay proxies each flow to its real destination, so the device needs
+neither a global IPv6 address nor router advertisements.
 
 [TCP]: https://en.wikipedia.org/wiki/Transmission_Control_Protocol
 [UDP]: https://fr.wikipedia.org/wiki/User_Datagram_Protocol

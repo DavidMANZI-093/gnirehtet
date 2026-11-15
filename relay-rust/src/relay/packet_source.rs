@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use super::ipv4_packet::Ipv4Packet;
+use super::ip_packet::IpPacket;
 use super::selector::Selector;
 
 /// Source that may produce packets.
@@ -28,6 +28,6 @@ use super::selector::Selector;
 ///
 /// It is implemented by `TcpConnection`.
 pub trait PacketSource {
-    fn get(&mut self) -> Option<Ipv4Packet<'_>>;
+    fn get(&mut self) -> Option<IpPacket<'_>>;
     fn next(&mut self, selector: &mut Selector);
 }

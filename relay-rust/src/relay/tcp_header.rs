@@ -17,6 +17,7 @@
 
 use super::binary;
 use super::ipv4_header::Ipv4HeaderData;
+use super::ipv6_header::Ipv6HeaderData;
 use std::mem;
 
 pub struct TcpHeader<'a> {
@@ -318,6 +319,29 @@ impl<'a> TcpHeaderMut<'a> {
         sum += destination & 0xFFFF;
         sum += u32::from(transport_length);
 
+        self.update_checksum_with_sum(sum, header_length, payload);
+    }
+
+    pub fn update_checksum_v6(&mut self, ipv6_header_data: &Ipv6HeaderData, payload: &[u8]) {
+        // pseudo-header checksum (cf RFC 8200 section 8.1)
+        let source = ipv6_header_data.source();
+        let destination = ipv6_header_data.destination();
+        let header_length = self.header_length();
+        debug_assert!(header_length.is_multiple_of(2) && header_length >= 20);
+        let transport_length = u32::from(header_length) + payload.len() as u32;
+
+        let mut sum = 6u32; // next header: TCP = 6
+        sum += (transport_length >> 16) + (transport_length & 0xFFFF);
+        for chunk in source.chunks(2).chain(destination.chunks(2)) {
+            sum += u32::from(binary::read_u16(chunk));
+        }
+
+        self.update_checksum_with_sum(sum, header_length, payload);
+    }
+
+    fn update_checksum_with_sum(&mut self, mut sum: u32, header_length: u8, payload: &[u8]) {
+        let payload_length = payload.len() as u16;
+
         // reset checksum field, so that it can be added with other bytes
         self.set_checksum(0);
 
@@ -336,16 +360,18 @@ impl<'a> TcpHeaderMut<'a> {
             }
 
             let mut p = payload.as_ptr();
-            // -1 to ignore the last if payload_length is odd
-            let end = p.offset(payload_length as isize - 1);
-            while p < end {
-                hsum += u32::from(*p);
-                sum += u32::from(*p.offset(1));
-                p = p.offset(2);
-            }
-            if !payload_length.is_multiple_of(2) {
-                // if payload length is odd, the last byte is considered high-order
-                hsum += u32::from(*payload.get_unchecked((payload_length - 1) as usize));
+            if payload_length > 0 {
+                // -1 to ignore the last if payload_length is odd
+                let end = p.offset(payload_length as isize - 1);
+                while p < end {
+                    hsum += u32::from(*p);
+                    sum += u32::from(*p.offset(1));
+                    p = p.offset(2);
+                }
+                if !payload_length.is_multiple_of(2) {
+                    // if payload length is odd, the last byte is considered high-order
+                    hsum += u32::from(*payload.get_unchecked((payload_length - 1) as usize));
+                }
             }
         }
 

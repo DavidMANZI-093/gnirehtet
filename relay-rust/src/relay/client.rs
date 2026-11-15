@@ -27,9 +27,10 @@ use std::rc::Rc;
 
 use super::binary;
 use super::close_listener::CloseListener;
-use super::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
-use super::ipv4_packet_buffer::Ipv4PacketBuffer;
+use super::ip_packet::IpPacket;
+use super::ip_packet_buffer::IpPacketBuffer;
 use super::packet_source::PacketSource;
+use super::packetizer::MAX_PACKET_LENGTH;
 use super::router::Router;
 use super::selector::Selector;
 use super::stream_buffer::StreamBuffer;
@@ -41,7 +42,7 @@ pub struct Client {
     stream: TcpStream,
     interests: Interest,
     token: Token,
-    client_to_network: Ipv4PacketBuffer,
+    client_to_network: IpPacketBuffer,
     network_to_client: StreamBuffer,
     router: Router,
     close_listener: Box<dyn CloseListener<Client>>,
@@ -79,10 +80,10 @@ impl<'a> ClientChannel<'a> {
     pub fn send_to_client(
         &mut self,
         selector: &mut Selector,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) -> io::Result<()> {
-        if ipv4_packet.length() as usize <= self.network_to_client.remaining() {
-            self.network_to_client.read_from(ipv4_packet.raw());
+        if ip_packet.length() as usize <= self.network_to_client.remaining() {
+            self.network_to_client.read_from(ip_packet.raw());
             self.update_interests(selector);
             Ok(())
         } else {
@@ -124,7 +125,7 @@ impl Client {
             stream,
             interests,
             token: Token(0), // default value, will be set afterwards
-            client_to_network: Ipv4PacketBuffer::new(),
+            client_to_network: IpPacketBuffer::new(),
             network_to_client: StreamBuffer::new(16 * MAX_PACKET_LENGTH),
             router: Router::new(),
             closed: false,
@@ -279,10 +280,10 @@ impl Client {
     pub fn send_to_client(
         &mut self,
         selector: &mut Selector,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) -> io::Result<()> {
-        if ipv4_packet.length() as usize <= self.network_to_client.remaining() {
-            self.network_to_client.read_from(ipv4_packet.raw());
+        if ip_packet.length() as usize <= self.network_to_client.remaining() {
+            self.network_to_client.read_from(ip_packet.raw());
             self.update_interests(selector);
             Ok(())
         } else {
@@ -340,7 +341,7 @@ impl Client {
     }
 
     fn push_one_packet_to_network(&mut self, selector: &mut Selector) -> bool {
-        match self.client_to_network.as_ipv4_packet() {
+        match self.client_to_network.as_ip_packet() {
             Some(ref packet) => {
                 let mut client_channel = ClientChannel::new(
                     &mut self.network_to_client,
@@ -363,10 +364,10 @@ impl Client {
             let consumed = {
                 let mut source = pending.borrow_mut();
                 let result = {
-                    let ipv4_packet = source
+                    let ip_packet = source
                         .get()
                         .expect("Unexpected pending source with no packet");
-                    self.send_to_client(selector, &ipv4_packet)
+                    self.send_to_client(selector, &ip_packet)
                 };
                 #[allow(clippy::match_wild_err_arm)]
                 match result {

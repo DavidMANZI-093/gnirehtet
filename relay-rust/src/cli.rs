@@ -15,7 +15,7 @@
  * limitations under the License.
  */
 
-use std::net::Ipv4Addr;
+use std::net::IpAddr;
 
 use clap::{Parser, Subcommand};
 
@@ -23,8 +23,8 @@ use clap::{Parser, Subcommand};
 pub const DEFAULT_PORT: u16 = 31416;
 /// DNS server used when the client does not specify any.
 pub const DEFAULT_DNS_SERVERS: &str = "8.8.8.8";
-/// Route used when the client does not specify any.
-pub const DEFAULT_ROUTES: &str = "0.0.0.0/0";
+/// Routes used when the client does not specify any (dual-stack).
+pub const DEFAULT_ROUTES: &str = "0.0.0.0/0,::/0";
 
 #[derive(Parser)]
 #[command(
@@ -149,7 +149,7 @@ pub enum Command {
     /// server(s). Otherwise, use 8.8.8.8 (Google public DNS).
     ///
     /// If -r is given, then only reverse tether the specified routes.
-    /// Otherwise, use 0.0.0.0/0 (redirect the whole traffic).
+    /// Otherwise, use 0.0.0.0/0 and ::/0 (redirect the whole traffic).
     ///
     /// If -p is given, then make the relay server listen on the specified
     /// port. Otherwise, use port 31416.
@@ -321,7 +321,7 @@ fn parse_dns_servers(value: &str) -> Result<String, String> {
             return Err("DNS server list contains an empty entry".to_string());
         }
         server
-            .parse::<Ipv4Addr>()
+            .parse::<IpAddr>()
             .map_err(|_| format!("invalid DNS server: {server}"))?;
         servers.push(server);
     }
@@ -339,15 +339,16 @@ fn parse_routes(value: &str) -> Result<String, String> {
             let prefix: u8 = prefix
                 .parse()
                 .map_err(|_| format!("invalid route prefix: {route}"))?;
-            if prefix > 32 {
+            let address: IpAddr = address
+                .parse()
+                .map_err(|_| format!("invalid route address: {route}"))?;
+            let max_prefix = if address.is_ipv4() { 32 } else { 128 };
+            if prefix > max_prefix {
                 return Err(format!("invalid route prefix: {route}"));
             }
-            address
-                .parse::<Ipv4Addr>()
-                .map_err(|_| format!("invalid route address: {route}"))?;
         } else {
             route
-                .parse::<Ipv4Addr>()
+                .parse::<IpAddr>()
                 .map_err(|_| format!("invalid route address: {route}"))?;
         }
         routes.push(route);
@@ -359,7 +360,7 @@ fn parse_routes(value: &str) -> Result<String, String> {
 mod tests {
     use clap::Parser;
 
-    use super::Cli;
+    use super::{Cli, Command};
 
     #[test]
     fn verbose_defaults_to_false() {
@@ -374,5 +375,43 @@ mod tests {
 
         let after = Cli::try_parse_from(["gnirehtet", "relay", "--verbose"]).unwrap();
         assert!(after.verbose);
+    }
+
+    #[test]
+    fn default_routes_are_dual_stack() {
+        let cli = Cli::try_parse_from(["gnirehtet", "run"]).unwrap();
+        match cli.cmd {
+            Command::Run { routes, .. } => assert_eq!("0.0.0.0/0,::/0", routes),
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn ipv6_routes_and_dns_are_accepted() {
+        let cli = Cli::try_parse_from([
+            "gnirehtet",
+            "run",
+            "-r",
+            "0.0.0.0/0,fd00::/8",
+            "-d",
+            "8.8.8.8,2001:4860:4860::8888",
+        ])
+        .unwrap();
+        match cli.cmd {
+            Command::Run {
+                routes,
+                dns_servers,
+                ..
+            } => {
+                assert_eq!("0.0.0.0/0,fd00::/8", routes);
+                assert_eq!("8.8.8.8,2001:4860:4860::8888", dns_servers);
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn rejects_ipv6_prefix_above_128() {
+        assert!(Cli::try_parse_from(["gnirehtet", "run", "-r", "fd00::/129"]).is_err());
     }
 }
