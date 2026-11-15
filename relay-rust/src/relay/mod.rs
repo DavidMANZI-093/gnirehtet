@@ -36,6 +36,8 @@ mod interrupt;
 mod ipv4_header;
 mod ipv4_packet;
 mod ipv4_packet_buffer;
+mod ipv6_header;
+mod ipv6_packet;
 mod net;
 mod packet_source;
 mod packetizer;

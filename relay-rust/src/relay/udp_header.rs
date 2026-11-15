@@ -17,9 +17,25 @@
 
 use super::binary;
 use super::ipv4_header::Ipv4HeaderData;
+use super::ipv6_header::Ipv6HeaderData;
 use std::mem;
 
 pub const UDP_HEADER_LENGTH: u8 = 8;
+
+/// Sum 16-bit big-endian words, padding an odd trailing byte on the left.
+fn sum_bytes(data: &[u8]) -> u32 {
+    let mut sum = 0u32;
+    let mut i = 0;
+    while i + 1 < data.len() {
+        sum += u32::from(binary::read_u16(&data[i..i + 2]));
+        i += 2;
+    }
+    if i < data.len() {
+        // odd trailing byte is the high-order byte of a 16-bit word
+        sum += u32::from(data[i]) << 8;
+    }
+    sum
+}
 
 pub struct UdpHeader<'a> {
     raw: &'a [u8],
@@ -150,6 +166,29 @@ impl<'a> UdpHeaderMut<'a> {
     pub fn update_checksum(&mut self, _ipv4_header_data: &Ipv4HeaderData, _payload: &[u8]) {
         // disable checksum validation
         self.set_checksum(0);
+    }
+
+    #[inline]
+    pub fn update_checksum_v6(&mut self, ipv6_header_data: &Ipv6HeaderData, payload: &[u8]) {
+        // IPv6 requires a UDP checksum (RFC 8200): 0 means "no checksum" and is
+        // not allowed, so compute it. If the computed value is 0, transmit 0xFFFF.
+        let source = ipv6_header_data.source();
+        let destination = ipv6_header_data.destination();
+        let transport_length = u32::from(UDP_HEADER_LENGTH) + payload.len() as u32;
+
+        let mut sum = 17u32; // next header: UDP = 17
+        sum += (transport_length >> 16) + (transport_length & 0xFFFF);
+        for chunk in source.chunks(2).chain(destination.chunks(2)) {
+            sum += u32::from(binary::read_u16(chunk));
+        }
+        self.set_checksum(0);
+        sum += sum_bytes(&self.raw[..usize::from(UDP_HEADER_LENGTH)]);
+        sum += sum_bytes(payload);
+        while (sum & !0xFFFF) != 0 {
+            sum = (sum & 0xFFFF) + (sum >> 16);
+        }
+        let checksum = !sum as u16;
+        self.set_checksum(if checksum == 0 { 0xFFFF } else { checksum });
     }
 }
 
