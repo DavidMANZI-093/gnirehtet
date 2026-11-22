@@ -39,8 +39,8 @@ pub enum TransportHeaderData {
 impl TransportHeaderData {
     pub fn parse(protocol: Protocol, raw: &[u8]) -> Option<Self> {
         match protocol {
-            Protocol::Udp => Some(UdpHeaderData::parse(raw).into()),
-            Protocol::Tcp => Some(TcpHeaderData::parse(raw).into()),
+            Protocol::Udp => UdpHeaderData::parse(raw).map(Into::into),
+            Protocol::Tcp => TcpHeaderData::parse(raw).map(Into::into),
             _ => None,
         }
     }

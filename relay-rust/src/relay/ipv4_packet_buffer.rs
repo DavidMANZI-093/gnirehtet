@@ -17,10 +17,10 @@
 
 use super::binary;
 use super::byte_buffer::ByteBuffer;
-use super::ipv4_header;
+use super::ipv4_header::{self, IPV4_MIN_HEADER_LENGTH};
 use super::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
 
-use crate::trace;
+use crate::{trace, warn};
 use std::io;
 
 const TAG: &str = "Ipv4PacketBuffer";
@@ -46,29 +46,62 @@ impl Ipv4PacketBuffer {
 
     fn available_packet_length(&self) -> Option<u16> {
         let data = self.buf.peek();
-        trace!(target: TAG, "Parse packet: {}", binary::build_packet_string(data));
-        if let Some((version, length)) = ipv4_header::peek_version_length(data) {
-            assert!(version == 4, "Not an Ipv4 packet, version={}", version);
-            if length as usize <= data.len() {
-                // full packet available
-                Some(length)
-            } else {
-                // no full packet available
-                None
-            }
+        let (version, length) = ipv4_header::peek_version_length(data)?;
+        if version != 4 || length < IPV4_MIN_HEADER_LENGTH as u16 {
+            return None;
+        }
+        if length as usize <= data.len() {
+            // full packet available
+            Some(length)
         } else {
-            // no packet
+            // no full packet available
             None
         }
     }
 
     pub fn as_ipv4_packet(&mut self) -> Option<Ipv4Packet<'_>> {
-        if self.available_packet_length().is_some() {
-            let data = self.buf.peek_mut();
-            Some(Ipv4Packet::parse(data))
-        } else {
-            None
-        }
+        let length = loop {
+            let data = self.buf.peek();
+            let (version, length) = ipv4_header::peek_version_length(data)?;
+            if version != 4 {
+                warn!(target: TAG, "Dropping non-IPv4 packet: version={}", version);
+                self.buf.consume(1);
+                continue;
+            }
+            let length = usize::from(length);
+            if length < IPV4_MIN_HEADER_LENGTH {
+                warn!(
+                    target: TAG,
+                    "Dropping malformed IPv4 packet: length={}", length
+                );
+                self.buf.consume(1);
+                continue;
+            }
+            if length > data.len() {
+                // no full packet available
+                return None;
+            }
+            trace!(
+                target: TAG,
+                "Parse packet: {}",
+                binary::build_packet_string(&data[..length])
+            );
+            let valid = {
+                let data = self.buf.peek_mut();
+                Ipv4Packet::parse(&mut data[..length]).is_some()
+            };
+            if valid {
+                break length;
+            }
+            warn!(
+                target: TAG,
+                "Dropping malformed IPv4 packet: {}",
+                binary::build_packet_string(&self.buf.peek()[..length])
+            );
+            self.buf.consume(length);
+        };
+        let data = self.buf.peek_mut();
+        Ipv4Packet::parse(&mut data[..length])
     }
 
     pub fn next(&mut self) {
@@ -198,6 +231,51 @@ mod tests {
         write_another_packet_to(&mut raw);
         write_packet_to(&mut raw);
         raw
+    }
+
+    #[test]
+    fn skip_malformed_ipv4_packet() {
+        let mut raw = vec![0x45, 0, 0, 19]; // version 4, total length < IPv4 header
+        write_packet_to(&mut raw);
+        let mut packet_buffer = Ipv4PacketBuffer::new();
+
+        let mut cursor = io::Cursor::new(raw);
+        packet_buffer.read_from(&mut cursor).unwrap();
+
+        let packet = packet_buffer.as_ipv4_packet().unwrap();
+        check_packet_headers(&packet);
+        packet_buffer.next();
+        assert!(packet_buffer.as_ipv4_packet().is_none());
+    }
+
+    #[test]
+    fn skip_non_ipv4_packet() {
+        let mut raw = vec![0x60, 0, 0, 0]; // version 6
+        write_packet_to(&mut raw);
+        let mut packet_buffer = Ipv4PacketBuffer::new();
+
+        let mut cursor = io::Cursor::new(raw);
+        packet_buffer.read_from(&mut cursor).unwrap();
+
+        let packet = packet_buffer.as_ipv4_packet().unwrap();
+        check_packet_headers(&packet);
+        packet_buffer.next();
+        assert!(packet_buffer.as_ipv4_packet().is_none());
+    }
+
+    #[test]
+    fn skip_zero_length_packet() {
+        let mut raw = vec![0x45, 0, 0, 0]; // version 4, total length 0
+        write_packet_to(&mut raw);
+        let mut packet_buffer = Ipv4PacketBuffer::new();
+
+        let mut cursor = io::Cursor::new(raw);
+        packet_buffer.read_from(&mut cursor).unwrap();
+
+        let packet = packet_buffer.as_ipv4_packet().unwrap();
+        check_packet_headers(&packet);
+        packet_buffer.next();
+        assert!(packet_buffer.as_ipv4_packet().is_none());
     }
 
     #[test]

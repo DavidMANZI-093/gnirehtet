@@ -46,19 +46,28 @@ pub const FLAG_RST: u16 = 1 << 2;
 pub const FLAG_PSH: u16 = 1 << 3;
 pub const FLAG_ACK: u16 = 1 << 4;
 
+pub const TCP_MIN_HEADER_LENGTH: usize = 20;
+
 #[allow(dead_code)]
 impl TcpHeaderData {
-    pub fn parse(raw: &[u8]) -> Self {
+    pub fn parse(raw: &[u8]) -> Option<Self> {
+        if raw.len() < TCP_MIN_HEADER_LENGTH {
+            return None;
+        }
         let data_offset_and_flags = binary::read_u16(&raw[12..14]);
-        Self {
+        let header_length = ((data_offset_and_flags & 0xF000) >> 10) as u8;
+        if header_length < TCP_MIN_HEADER_LENGTH as u8 || usize::from(header_length) > raw.len() {
+            return None;
+        }
+        Some(Self {
             source_port: binary::read_u16(&raw[0..2]),
             destination_port: binary::read_u16(&raw[2..4]),
             sequence_number: binary::read_u32(&raw[4..8]),
             acknowledgement_number: binary::read_u32(&raw[8..12]),
-            header_length: ((data_offset_and_flags & 0xF000) >> 10) as u8,
+            header_length,
             flags: data_offset_and_flags & 0x1FF,
             window: binary::read_u16(&raw[14..16]),
-        }
+        })
     }
 
     #[inline]
@@ -463,9 +472,34 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_invalid_header() {
+        assert!(TcpHeaderData::parse(&[]).is_none());
+        assert!(TcpHeaderData::parse(&[0u8; 19]).is_none());
+
+        let mut raw = create_tcp_header();
+        raw[12..14].copy_from_slice(&(4u16 << 12).to_be_bytes()); // data offset 4
+        assert!(TcpHeaderData::parse(&raw).is_none());
+
+        let mut raw = create_tcp_header();
+        raw[12..14].copy_from_slice(&(6u16 << 12).to_be_bytes()); // header length 24 > buffer length 20
+        assert!(TcpHeaderData::parse(&raw).is_none());
+    }
+
+    #[test]
+    fn parse_truncated_tcp_packet_does_not_panic() {
+        let packet = create_packet();
+        for length in 0..packet.len() {
+            let mut raw = packet[..length].to_vec();
+            if let Some(packet) = Ipv4Packet::parse(&mut raw) {
+                assert!(packet.is_valid());
+            }
+        }
+    }
+
+    #[test]
     fn edit_header() {
         let raw = &mut create_tcp_header()[..];
-        let mut header_data = TcpHeaderData::parse(raw);
+        let mut header_data = TcpHeaderData::parse(raw).unwrap();
         let mut header = header_data.bind_mut(raw);
 
         header.set_source_port(1111);
@@ -511,7 +545,7 @@ mod tests {
     #[test]
     fn compute_checksum() {
         let raw = &mut create_packet()[..];
-        let mut ipv4_packet = Ipv4Packet::parse(raw);
+        let mut ipv4_packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, mut transport) = ipv4_packet.split_mut();
         if let Some((TransportHeaderMut::Tcp(ref mut tcp_header), ref payload)) = transport {
             // set a fake checksum value to assert that it is correctly computed
@@ -553,7 +587,7 @@ mod tests {
     #[test]
     fn compute_checksum_odd() {
         let raw = &mut create_odd_packet()[..];
-        let mut ipv4_packet = Ipv4Packet::parse(raw);
+        let mut ipv4_packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, mut transport) = ipv4_packet.split_mut();
         if let Some((TransportHeaderMut::Tcp(ref mut tcp_header), ref payload)) = transport {
             // set a fake checksum value to assert that it is correctly computed
@@ -595,7 +629,7 @@ mod tests {
     #[test]
     fn compute_checksum_empty_payload() {
         let raw = &mut create_empty_packet()[..];
-        let mut ipv4_packet = Ipv4Packet::parse(raw);
+        let mut ipv4_packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, mut transport) = ipv4_packet.split_mut();
         if let Some((TransportHeaderMut::Tcp(ref mut tcp_header), ref payload)) = transport {
             // set a fake checksum value to assert that it is correctly computed
@@ -668,7 +702,7 @@ mod tests {
     #[test]
     fn bench_checksum() {
         let raw = &mut create_long_packet()[..];
-        let mut ipv4_packet = Ipv4Packet::parse(raw);
+        let mut ipv4_packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, mut transport) = ipv4_packet.split_mut();
         if let Some((TransportHeaderMut::Tcp(ref mut tcp_header), ref payload)) = transport {
             use std::time::Instant;

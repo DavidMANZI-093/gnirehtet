@@ -39,11 +39,18 @@ pub struct UdpHeaderData {
 
 #[allow(dead_code)]
 impl UdpHeaderData {
-    pub fn parse(raw: &[u8]) -> Self {
-        Self {
+    pub fn parse(raw: &[u8]) -> Option<Self> {
+        if raw.len() < usize::from(UDP_HEADER_LENGTH) {
+            return None;
+        }
+        let length = binary::read_u16(&raw[4..6]);
+        if usize::from(length) < usize::from(UDP_HEADER_LENGTH) || usize::from(length) > raw.len() {
+            return None;
+        }
+        Some(Self {
             source_port: binary::read_u16(&raw[0..2]),
             destination_port: binary::read_u16(&raw[2..4]),
-        }
+        })
     }
 
     #[inline]
@@ -161,7 +168,7 @@ mod tests {
         let mut raw = Vec::with_capacity(8);
         raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
         raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
-        raw.extend_from_slice(&(42u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(8u16).to_be_bytes()); // length
         raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
         raw
     }
@@ -169,15 +176,29 @@ mod tests {
     #[test]
     fn parse_header() {
         let raw = &create_header()[..];
-        let data = UdpHeaderData::parse(raw);
+        let data = UdpHeaderData::parse(raw).unwrap();
         assert_eq!(1234, data.source_port());
         assert_eq!(5678, data.destination_port());
     }
 
     #[test]
+    fn parse_rejects_invalid_header() {
+        assert!(UdpHeaderData::parse(&[]).is_none());
+        assert!(UdpHeaderData::parse(&[0u8; 7]).is_none());
+
+        let mut raw = create_header();
+        raw[4..6].copy_from_slice(&(7u16).to_be_bytes()); // length < UDP header length
+        assert!(UdpHeaderData::parse(&raw).is_none());
+
+        let mut raw = create_header();
+        raw[4..6].copy_from_slice(&(9u16).to_be_bytes()); // length > buffer length
+        assert!(UdpHeaderData::parse(&raw).is_none());
+    }
+
+    #[test]
     fn edit_header() {
         let raw = &mut create_header()[..];
-        let mut header_data = UdpHeaderData::parse(raw);
+        let mut header_data = UdpHeaderData::parse(raw).unwrap();
         let mut header = header_data.bind_mut(raw);
 
         header.set_source_port(1111);

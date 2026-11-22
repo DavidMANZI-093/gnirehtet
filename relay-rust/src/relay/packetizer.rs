@@ -155,7 +155,7 @@ mod tests {
     #[test]
     fn merge_headers_and_payload() {
         let raw = &mut create_packet()[..];
-        let reference_packet = Ipv4Packet::parse(raw);
+        let reference_packet = Ipv4Packet::parse(raw).unwrap();
 
         let data = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let mut mock = MockDatagramSocket::from_data(&data);
@@ -172,7 +172,7 @@ mod tests {
     #[test]
     fn packetize_chunks() {
         let raw = &mut create_packet()[..];
-        let reference_packet = Ipv4Packet::parse(raw);
+        let reference_packet = Ipv4Packet::parse(raw).unwrap();
 
         let data = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let mut cursor = io::Cursor::new(&data);

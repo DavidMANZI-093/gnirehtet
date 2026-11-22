@@ -27,17 +27,22 @@ pub struct Ipv4Packet<'a> {
 }
 
 impl<'a> Ipv4Packet<'a> {
-    pub fn parse(raw: &'a mut [u8]) -> Self {
-        let ipv4_header_data = Ipv4HeaderData::parse(raw);
+    pub fn parse(raw: &'a mut [u8]) -> Option<Self> {
+        let ipv4_header_data = Ipv4HeaderData::parse(raw)?;
+        let header_length = usize::from(ipv4_header_data.header_length());
+        let total_length = usize::from(ipv4_header_data.total_length());
+        if total_length > raw.len() {
+            return None;
+        }
         let transport_header_data = {
-            let payload = &raw[ipv4_header_data.header_length() as usize..];
+            let payload = &raw[header_length..total_length];
             TransportHeaderData::parse(ipv4_header_data.protocol(), payload)
         };
-        Self {
-            raw: &mut raw[..ipv4_header_data.total_length() as usize],
+        Some(Self {
+            raw: &mut raw[..total_length],
             ipv4_header_data,
             transport_header_data,
-        }
+        })
     }
 
     pub fn new(
@@ -248,7 +253,7 @@ mod tests {
 
         raw.extend_from_slice(&(1234u16).to_be_bytes()); // source port
         raw.extend_from_slice(&(5678u16).to_be_bytes()); // destination port
-        raw.extend_from_slice(&(4u16).to_be_bytes()); // length
+        raw.extend_from_slice(&(12u16).to_be_bytes()); // length
         raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
 
         raw.extend_from_slice(&(0x11223344u32).to_be_bytes()); // payload
@@ -259,7 +264,7 @@ mod tests {
     #[test]
     fn parse_headers() {
         let raw = &mut create_packet()[..];
-        let ipv4_packet = Ipv4Packet::parse(raw);
+        let ipv4_packet = Ipv4Packet::parse(raw).unwrap();
 
         {
             let ipv4_header = ipv4_packet.ipv4_header();
@@ -280,9 +285,68 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_truncated_packet() {
+        let packet = create_packet();
+        for length in 0..packet.len() {
+            let mut raw = packet[..length].to_vec();
+            assert!(
+                Ipv4Packet::parse(&mut raw).is_none(),
+                "truncated packet of length {length} was accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn parse_rejects_invalid_ipv4_header() {
+        let mut raw = create_packet();
+        raw[0] = 6u8 << 4 | 5; // version 6
+        assert!(Ipv4Packet::parse(&mut raw).is_none());
+
+        let mut raw = create_packet();
+        raw[0] = 4u8 << 4 | 4; // IHL 4
+        assert!(Ipv4Packet::parse(&mut raw).is_none());
+
+        let mut raw = create_packet();
+        raw[2..4].copy_from_slice(&(1u16).to_be_bytes()); // total length 1
+        assert!(Ipv4Packet::parse(&mut raw).is_none());
+    }
+
+    #[test]
+    fn parse_invalid_tcp_header_as_invalid_packet() {
+        let mut raw = create_packet();
+        raw[9] = 6; // TCP
+        raw[2..4].copy_from_slice(&(20u16).to_be_bytes());
+        let raw = &mut raw[..20];
+        let packet = Ipv4Packet::parse(raw).unwrap();
+        assert!(!packet.is_valid());
+        assert!(packet.headers_data().1.is_none());
+    }
+
+    #[test]
+    fn parse_ignores_trailing_bytes() {
+        let mut raw = create_packet();
+        raw.extend_from_slice(&[0xff; 8]);
+        let packet = Ipv4Packet::parse(&mut raw).unwrap();
+        assert_eq!(32, packet.raw().len());
+    }
+
+    #[test]
+    fn parse_arbitrary_bytes_does_not_panic() {
+        let mut state = 0x1234_5678u32;
+        for length in 0..128 {
+            let mut raw = vec![0u8; length];
+            for byte in &mut raw {
+                state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                *byte = (state >> 24) as u8;
+            }
+            let _ = Ipv4Packet::parse(&mut raw);
+        }
+    }
+
+    #[test]
     fn payload() {
         let raw = &mut create_packet()[..];
-        let ipv4_packet = Ipv4Packet::parse(raw);
+        let ipv4_packet = Ipv4Packet::parse(raw).unwrap();
         assert_eq!([0x11, 0x22, 0x33, 0x44], ipv4_packet.payload().unwrap());
     }
 }

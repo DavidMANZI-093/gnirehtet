@@ -891,11 +891,9 @@ impl Connection for TcpConnection {
 
 impl PacketSource for TcpConnection {
     fn get(&mut self) -> Option<Ipv4Packet<'_>> {
-        if let Some(pending) = self.pending_packet.as_mut() {
-            Some(Ipv4Packet::parse(&mut pending.raw[..]))
-        } else {
-            None
-        }
+        self.pending_packet
+            .as_mut()
+            .and_then(|pending| Ipv4Packet::parse(&mut pending.raw[..]))
     }
 
     fn next(&mut self, selector: &mut Selector) {
@@ -960,7 +958,7 @@ mod tests {
 
     fn create_packetizer() -> Packetizer {
         let raw = &mut create_tcp_packet()[..];
-        let packet = Ipv4Packet::parse(raw);
+        let packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, transport_header) = packet.headers();
         Packetizer::new(&ipv4_header, &transport_header.unwrap())
     }
@@ -976,7 +974,7 @@ mod tests {
         let stream = mio::net::TcpStream::from_std(std_stream);
 
         let raw = &mut create_tcp_packet()[..];
-        let packet = Ipv4Packet::parse(raw);
+        let packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header_data, transport_header_data) = packet.headers_data();
         let id =
             ConnectionId::from_headers(ipv4_header_data, transport_header_data.as_ref().unwrap());

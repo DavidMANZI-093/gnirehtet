@@ -45,13 +45,30 @@ pub enum Protocol {
     Other,
 }
 
+pub const IPV4_MIN_HEADER_LENGTH: usize = 20;
+
 #[allow(dead_code)]
 impl Ipv4HeaderData {
-    pub fn parse(raw: &[u8]) -> Self {
-        Self {
-            _version: raw[0] >> 4,
-            header_length: (raw[0] & 0xf) << 2,
-            total_length: binary::read_u16(&raw[2..4]),
+    pub fn parse(raw: &[u8]) -> Option<Self> {
+        if raw.len() < IPV4_MIN_HEADER_LENGTH {
+            return None;
+        }
+        let version = raw[0] >> 4;
+        if version != 4 {
+            return None;
+        }
+        let header_length = (raw[0] & 0xf) << 2;
+        if header_length < IPV4_MIN_HEADER_LENGTH as u8 || usize::from(header_length) > raw.len() {
+            return None;
+        }
+        let total_length = binary::read_u16(&raw[2..4]);
+        if usize::from(total_length) < usize::from(header_length) {
+            return None;
+        }
+        Some(Self {
+            _version: version,
+            header_length,
+            total_length,
             protocol: match raw[9] {
                 6 => Protocol::Tcp,
                 17 => Protocol::Udp,
@@ -59,7 +76,7 @@ impl Ipv4HeaderData {
             },
             source: binary::read_u32(&raw[12..16]),
             destination: binary::read_u32(&raw[16..20]),
-        }
+        })
     }
 
     pub fn bind<'c, 'a: 'c, 'b: 'c>(&'a self, raw: &'b [u8]) -> Ipv4Header<'c> {
@@ -227,7 +244,7 @@ mod tests {
     #[test]
     fn parse_header() {
         let raw = &create_header()[..];
-        let data = Ipv4HeaderData::parse(raw);
+        let data = Ipv4HeaderData::parse(raw).unwrap();
         assert_eq!(4, data._version);
         assert_eq!(20, data.header_length);
         assert_eq!(28, data.total_length);
@@ -237,9 +254,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_rejects_invalid_header() {
+        assert!(Ipv4HeaderData::parse(&[]).is_none());
+        assert!(Ipv4HeaderData::parse(&[0u8; 19]).is_none());
+
+        let mut raw = create_header();
+        raw[0] = 6u8 << 4 | 5; // version 6
+        assert!(Ipv4HeaderData::parse(&raw).is_none());
+
+        let mut raw = create_header();
+        raw[0] = 4u8 << 4 | 4; // IHL 4
+        assert!(Ipv4HeaderData::parse(&raw).is_none());
+
+        let mut raw = create_header();
+        raw[0] = 4u8 << 4 | 6; // IHL 6, header length 24 > buffer length 20
+        assert!(Ipv4HeaderData::parse(&raw).is_none());
+
+        let mut raw = create_header();
+        raw[2..4].copy_from_slice(&(19u16).to_be_bytes()); // total length < header length
+        assert!(Ipv4HeaderData::parse(&raw).is_none());
+    }
+
+    #[test]
     fn edit_header() {
         let raw = &mut create_header()[..];
-        let mut header_data = Ipv4HeaderData::parse(raw);
+        let mut header_data = Ipv4HeaderData::parse(raw).unwrap();
         let mut header = header_data.bind_mut(raw);
 
         header.set_source(0x87654321);
@@ -271,7 +310,7 @@ mod tests {
     #[test]
     fn compute_checksum() {
         let raw = &mut create_header()[..];
-        let mut header_data = Ipv4HeaderData::parse(raw);
+        let mut header_data = Ipv4HeaderData::parse(raw).unwrap();
         let mut header = header_data.bind_mut(raw);
 
         // set a fake checksum value to assert that it is correctly computed
