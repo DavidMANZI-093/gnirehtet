@@ -259,9 +259,9 @@ jobs:
         run: |
           set -euo pipefail
           if gh release view "$TAG" >/dev/null 2>&1; then
-            gh release upload "$TAG" dist/*.zip dist/SHA256SUMS --clobber
+            gh release upload "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS --clobber
           else
-            gh release create "$TAG" dist/*.zip dist/SHA256SUMS \
+            gh release create "$TAG" dist/*.zip dist/*.tar.gz dist/SHA256SUMS \
               --verify-tag \
               --draft \
               --title "Gnirehtet ${VERSION} (d3fault fork)" \
