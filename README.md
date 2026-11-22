@@ -1,4 +1,4 @@
-## Gnirehtet (v2.6.1) - Community Edition
+## Gnirehtet (v2.6.2) - Community Edition
 
 This project provides **reverse tethering** over `adb` for Android: it
 allows devices to use the internet connection of the computer they are plugged
@@ -48,18 +48,18 @@ Download the [latest release][latest].
 
 [latest]: https://github.com/DavidMANZI-093/gnirehtet/releases/latest
 
-- **Linux:** [`gnirehtet-linux64-v2.6.1.zip`][direct-linux64]
-- **Windows:** [`gnirehtet-win64-v2.6.1.zip`][direct-win64]
-- **macOS Intel:** [`gnirehtet-macos-x64-v2.6.1.zip`][direct-macos-x64]
-- **macOS Apple Silicon:** [`gnirehtet-macos-arm64-v2.6.1.zip`][direct-macos-arm64]
+- **Linux:** [`gnirehtet-linux64-v2.6.2.zip`][direct-linux64]
+- **Windows:** [`gnirehtet-win64-v2.6.2.zip`][direct-win64]
+- **macOS Intel:** [`gnirehtet-macos-x64-v2.6.2.zip`][direct-macos-x64]
+- **macOS Apple Silicon:** [`gnirehtet-macos-arm64-v2.6.2.zip`][direct-macos-arm64]
 
 Checksums are available in [`SHA256SUMS`][sha256sums].
 
-[direct-linux64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.1/gnirehtet-linux64-v2.6.1.zip
-[direct-win64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.1/gnirehtet-win64-v2.6.1.zip
-[direct-macos-x64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.1/gnirehtet-macos-x64-v2.6.1.zip
-[direct-macos-arm64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.1/gnirehtet-macos-arm64-v2.6.1.zip
-[sha256sums]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.1/SHA256SUMS
+[direct-linux64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.2/gnirehtet-linux64-v2.6.2.zip
+[direct-win64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.2/gnirehtet-win64-v2.6.2.zip
+[direct-macos-x64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.2/gnirehtet-macos-x64-v2.6.2.zip
+[direct-macos-arm64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.2/gnirehtet-macos-arm64-v2.6.2.zip
+[sha256sums]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.2/SHA256SUMS
 
 Then extract it.
 
