@@ -44,6 +44,11 @@ const MTU: u16 = 0x4000;
 // 20 bytes for IP headers, 20 bytes for TCP headers
 const MAX_PAYLOAD_LENGTH: u16 = MTU - 20 - 20_u16;
 
+struct PendingPacket {
+    raw: Vec<u8>,
+    payload_length: u16,
+}
+
 pub struct TcpConnection {
     self_weak: Weak<RefCell<TcpConnection>>,
     id: ConnectionId,
@@ -53,7 +58,8 @@ pub struct TcpConnection {
     token: Token,
     client_to_network: StreamBuffer,
     network_to_client: Packetizer,
-    packet_for_client_length: Option<u16>,
+    pending_packet: Option<PendingPacket>,
+    pending_ack: bool,
     closed: bool,
     tcb: Tcb,
 }
@@ -174,7 +180,8 @@ impl TcpConnection {
             token: Token(0), // default value, will be set afterwards
             client_to_network: StreamBuffer::new(4 * MAX_PACKET_LENGTH),
             network_to_client: packetizer,
-            packet_for_client_length: None,
+            pending_packet: None,
+            pending_ack: false,
             closed: false,
             tcb: Tcb::new(),
         }));
@@ -219,6 +226,7 @@ impl TcpConnection {
     // return Err(err) with err.kind() == io::ErrorKind::WouldBlock on spurious event
     fn process(&mut self, selector: &mut Selector, event: Event) -> io::Result<()> {
         if !self.closed {
+            self.flush_pending_ack(selector);
             let readable = event.is_readable();
             let writable = event.is_writable();
             if readable || writable {
@@ -313,27 +321,33 @@ impl TcpConnection {
                 .packetize_read(&mut self.stream, max_payload_length)
             {
                 Ok(Some(ipv4_packet)) => {
-                    let len = ipv4_packet.payload().unwrap().len();
-                    let packet_length = ipv4_packet.length();
+                    let payload_length = ipv4_packet.payload().unwrap().len();
                     match Self::send_to_client(&self.client, selector, &ipv4_packet) {
                         Ok(_) => {
                             cx_debug!(
                                 target: TAG,
                                 self.id,
                                 "Packet ({} bytes) sent to client {}",
-                                len,
+                                payload_length,
                                 self.tcb.numbers()
                             );
-                            self.tcb.sequence_number += Wrapping(len as u32);
+                            self.tcb.sequence_number += Wrapping(payload_length as u32);
+                            // the packet carries an ACK, so any deferred ACK is redundant.
+                            self.pending_ack = false;
                         }
                         Err(_) => {
-                            // ask to the client to pull when its buffer is not full
+                            // the packetizer buffer is reused for control packets, keeping an
+                            // owned copy until the client can accept it.
+                            let raw = ipv4_packet.raw().to_vec();
                             let client_rc =
                                 self.client.upgrade().expect("Expected client not found");
                             let mut client = client_rc.borrow_mut();
                             let self_rc = self.self_weak.upgrade().unwrap();
                             client.register_pending_packet_source(self_rc);
-                            self.packet_for_client_length = Some(packet_length);
+                            self.pending_packet = Some(PendingPacket {
+                                raw,
+                                payload_length: payload_length as u16,
+                            });
                             break;
                         }
                     }
@@ -397,20 +411,56 @@ impl TcpConnection {
         client_channel: &mut ClientChannel,
         flags: u16,
     ) {
+        let is_pure_ack = flags == tcp_header::FLAG_ACK;
         let ipv4_packet = Self::create_empty_response_packet(
             &self.id,
             &mut self.network_to_client,
             &self.tcb,
             flags,
         );
-        if let Err(err) = client_channel.send_to_client(selector, &ipv4_packet) {
-            // losing such an empty packet will not break the TCP connection
-            cx_warn!(
-                target: TAG,
-                self.id,
-                "Cannot send packet to client: {}",
-                err
-            );
+        match client_channel.send_to_client(selector, &ipv4_packet) {
+            Ok(()) => {
+                if (flags & tcp_header::FLAG_ACK) != 0 {
+                    // A newer ACK makes any deferred ACK redundant.
+                    self.pending_ack = false;
+                }
+            }
+            Err(err) if is_pure_ack && err.kind() == io::ErrorKind::WouldBlock => {
+                // Keep the ACK pending: the client will pull it once its buffer has room.
+                self.pending_ack = true;
+                cx_debug!(target: TAG, self.id, "Deferring ACK: client buffer full");
+            }
+            Err(err) => {
+                // losing such an empty packet will not break the TCP connection
+                cx_warn!(
+                    target: TAG,
+                    self.id,
+                    "Cannot send packet to client: {}",
+                    err
+                );
+            }
+        }
+    }
+
+    /// Retry a deferred ACK when the client is not borrowed.
+    fn flush_pending_ack(&mut self, selector: &mut Selector) {
+        if self.pending_ack && !self.closed {
+            // reply_empty_packet_to_client() restores the flag if the buffer is still full.
+            self.pending_ack = false;
+            self.send_empty_packet_to_client(selector, tcp_header::FLAG_ACK);
+        }
+    }
+
+    /// Retry a deferred ACK using an already-borrowed client channel.
+    fn flush_pending_ack_with_channel(
+        &mut self,
+        selector: &mut Selector,
+        client_channel: &mut ClientChannel,
+    ) {
+        if self.pending_ack && !self.closed {
+            // reply_empty_packet_to_client() restores the flag if the buffer is still full.
+            self.pending_ack = false;
+            self.reply_empty_packet_to_client(selector, client_channel, tcp_header::FLAG_ACK);
         }
     }
 
@@ -491,6 +541,7 @@ impl TcpConnection {
                 expected_packet,
                 tcp_header.flags()
             );
+            self.reply_empty_packet_to_client(selector, client_channel, tcp_header::FLAG_ACK);
             return;
         }
 
@@ -777,7 +828,7 @@ impl TcpConnection {
         if !self.tcb.state.is_connected() || self.tcb.state.is_closed() {
             return false;
         }
-        if self.packet_for_client_length.is_some() {
+        if self.pending_packet.is_some() {
             // a packet is already pending
             return false;
         }
@@ -800,6 +851,7 @@ impl Connection for TcpConnection {
         client_channel: &mut ClientChannel,
         ipv4_packet: &Ipv4Packet,
     ) {
+        self.flush_pending_ack_with_channel(selector, client_channel);
         self.handle_packet(selector, client_channel, ipv4_packet);
         if !self.closed {
             self.update_interests(selector);
@@ -839,28 +891,171 @@ impl Connection for TcpConnection {
 
 impl PacketSource for TcpConnection {
     fn get(&mut self) -> Option<Ipv4Packet<'_>> {
-        if let Some(len) = self.packet_for_client_length {
-            Some(self.network_to_client.inflate(len))
+        if let Some(pending) = self.pending_packet.as_mut() {
+            Some(Ipv4Packet::parse(&mut pending.raw[..]))
         } else {
             None
         }
     }
 
     fn next(&mut self, selector: &mut Selector) {
-        let len = self
-            .packet_for_client_length
+        let pending = self
+            .pending_packet
+            .take()
             .expect("next() called on empty packet source");
         cx_debug!(
             target: TAG,
             self.id,
             "Deferred packet ({} bytes) sent to client {}",
-            len,
+            pending.payload_length,
             self.tcb.numbers()
         );
-        self.tcb.sequence_number += Wrapping(u32::from(len));
-        self.packet_for_client_length = None;
+        self.tcb.sequence_number += Wrapping(u32::from(pending.payload_length));
         if !self.closed {
             self.update_interests(selector);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io::Cursor;
+    use std::num::Wrapping;
+    use std::rc::Weak;
+
+    use mio::Token;
+
+    use super::{PendingPacket, Tcb, TcpConnection};
+    use crate::relay::connection::ConnectionId;
+    use crate::relay::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
+    use crate::relay::packet_source::PacketSource;
+    use crate::relay::packetizer::Packetizer;
+    use crate::relay::selector::Selector;
+    use crate::relay::stream_buffer::StreamBuffer;
+
+    fn create_tcp_packet() -> Vec<u8> {
+        let mut raw = Vec::with_capacity(40);
+
+        raw.push(4u8 << 4 | 5); // version + IHL
+        raw.push(0); // ToS
+        raw.extend_from_slice(&(40u16).to_be_bytes()); // total length
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // id + flags + fragment offset
+        raw.push(64); // TTL
+        raw.push(6); // TCP
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0x0A000002u32).to_be_bytes()); // 10.0.0.2
+        raw.extend_from_slice(&(0x5DB8D822u32).to_be_bytes()); // 93.184.216.34
+
+        raw.extend_from_slice(&(12345u16).to_be_bytes()); // source port
+        raw.extend_from_slice(&(80u16).to_be_bytes()); // destination port
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // sequence
+        raw.extend_from_slice(&(0u32).to_be_bytes()); // acknowledgement
+        raw.extend_from_slice(&(5u16 << 12).to_be_bytes()); // data offset
+        raw.extend_from_slice(&(65535u16).to_be_bytes()); // window
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // checksum
+        raw.extend_from_slice(&(0u16).to_be_bytes()); // urgent pointer
+
+        raw
+    }
+
+    fn create_packetizer() -> Packetizer {
+        let raw = &mut create_tcp_packet()[..];
+        let packet = Ipv4Packet::parse(raw);
+        let (ipv4_header, transport_header) = packet.headers();
+        Packetizer::new(&ipv4_header, &transport_header.unwrap())
+    }
+
+    fn create_connection(
+        packetizer: Packetizer,
+        pending_packet: Option<PendingPacket>,
+    ) -> TcpConnection {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let std_stream = std::net::TcpStream::connect(addr).unwrap();
+        let _peer = listener.accept().unwrap();
+        let stream = mio::net::TcpStream::from_std(std_stream);
+
+        let raw = &mut create_tcp_packet()[..];
+        let packet = Ipv4Packet::parse(raw);
+        let (ipv4_header_data, transport_header_data) = packet.headers_data();
+        let id =
+            ConnectionId::from_headers(ipv4_header_data, transport_header_data.as_ref().unwrap());
+
+        let mut tcb = Tcb::new();
+        tcb.sequence_number = Wrapping(1000);
+
+        TcpConnection {
+            self_weak: Weak::new(),
+            id,
+            client: Weak::new(),
+            stream,
+            interests: None,
+            token: Token(0),
+            client_to_network: StreamBuffer::new(4 * MAX_PACKET_LENGTH),
+            network_to_client: packetizer,
+            pending_packet,
+            pending_ack: false,
+            closed: true,
+            tcb,
+        }
+    }
+
+    fn create_pending_packet(packetizer: &mut Packetizer, payload_length: usize) -> PendingPacket {
+        let mut cursor = Cursor::new(vec![0u8; payload_length]);
+        let packet = packetizer
+            .packetize_read(&mut cursor, None)
+            .unwrap()
+            .unwrap();
+        assert_eq!(payload_length, packet.payload().unwrap().len());
+        PendingPacket {
+            raw: packet.raw().to_vec(),
+            payload_length: payload_length as u16,
+        }
+    }
+
+    #[test]
+    fn deferred_packet_advances_sequence_by_payload_length() {
+        let payload_length = 1460;
+        let total_length = 20 + 20 + payload_length;
+
+        let mut packetizer = create_packetizer();
+        let pending = create_pending_packet(&mut packetizer, payload_length);
+        let mut connection = create_connection(packetizer, Some(pending));
+        let initial_sequence = connection.tcb.sequence_number.0;
+
+        {
+            let packet = connection.get().unwrap();
+            assert_eq!(total_length as u16, packet.length());
+            assert_eq!(payload_length, packet.payload().unwrap().len());
+        }
+
+        let mut selector = Selector::create().unwrap();
+        connection.next(&mut selector);
+
+        assert_eq!(
+            initial_sequence + payload_length as u32,
+            connection.tcb.sequence_number.0
+        );
+        assert!(connection.pending_packet.is_none());
+    }
+
+    #[test]
+    fn deferred_packet_survives_packetizer_reuse() {
+        let payload_length = 1460;
+        let total_length = 20 + 20 + payload_length;
+
+        let mut packetizer = create_packetizer();
+        let pending = create_pending_packet(&mut packetizer, payload_length);
+        let mut connection = create_connection(packetizer, Some(pending));
+
+        // Simulate an empty ACK overwriting the connection's packetizer buffer.
+        {
+            let packet = connection.network_to_client.packetize_empty_payload();
+            assert_eq!(40, packet.length());
+        }
+
+        let packet = connection.get().unwrap();
+        assert_eq!(total_length as u16, packet.length());
+        assert_eq!(payload_length, packet.payload().unwrap().len());
     }
 }
