@@ -225,7 +225,7 @@ jobs:
           make_stage linux64
           cp artifacts/relay-linux64/gnirehtet dist/stage/linux64/gnirehtet
           chmod +x dist/stage/linux64/gnirehtet
-          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-linux64-v${VERSION}.tar.gz" -C "../" "linux64")
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "../gnirehtet-linux64-v${VERSION}.tar.gz" "linux64")
 
           make_stage win64
           cp artifacts/relay-win64/gnirehtet.exe dist/stage/win64/gnirehtet.exe
@@ -235,12 +235,12 @@ jobs:
           make_stage macos-x64
           cp artifacts/relay-macos-x64/gnirehtet dist/stage/macos-x64/gnirehtet
           chmod +x dist/stage/macos-x64/gnirehtet
-          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-macos-x64-v${VERSION}.tar.gz" -C "../" "macos-x64")
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "../gnirehtet-macos-x64-v${VERSION}.tar.gz" "macos-x64")
 
           make_stage macos-arm64
           cp artifacts/relay-macos-arm64/gnirehtet dist/stage/macos-arm64/gnirehtet
           chmod +x dist/stage/macos-arm64/gnirehtet
-          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-macos-arm64-v${VERSION}.tar.gz" -C "../" "macos-arm64")
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "../gnirehtet-macos-arm64-v${VERSION}.tar.gz" "macos-arm64")
 
           for archive in dist/*.zip; do
             if unzip -Z1 "$archive" | grep -q '/'; then
@@ -249,7 +249,7 @@ jobs:
             fi
           done
 
-          (cd dist && sha256sum ./*.zip > SHA256SUMS)
+          (cd dist && sha256sum ./*.zip ./*.tar.gz > SHA256SUMS)
 
       - name: create draft release
         env:
