@@ -1,10 +1,10 @@
 ## Gnirehtet (v2.6.3) - Community Edition
 
-[![check](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml/badge.svg?branch=main)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml)
-[![audit](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml/badge.svg?branch=main)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml)
+[![check](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml/badge.svg)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml)
+[![audit](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml/badge.svg)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml)
 [![release](https://img.shields.io/github/v/release/DavidMANZI-093/gnirehtet)](https://github.com/DavidMANZI-093/gnirehtet/releases/latest)
 [![license](https://img.shields.io/github/license/DavidMANZI-093/gnirehtet)](https://github.com/DavidMANZI-093/gnirehtet/blob/main/LICENSE)
-[![dependencies](https://deps.rs/repo/github/DavidMANZI-093/gnirehtet/status.svg)](https://deps.rs/repo/github/DavidMANZI-093/gnirehtet?path=relay-rust)
+[![dependencies](https://deps.rs/repo/github/DavidMANZI-093/gnirehtet/status.svg?path=relay-rust)](https://deps.rs/repo/github/DavidMANZI-093/gnirehtet?path=relay-rust)
 
 This project provides **reverse tethering** over `adb` for Android: it
 allows devices to use the internet connection of the computer they are plugged
