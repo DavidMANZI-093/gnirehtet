@@ -225,22 +225,22 @@ jobs:
           make_stage linux64
           cp artifacts/relay-linux64/gnirehtet dist/stage/linux64/gnirehtet
           chmod +x dist/stage/linux64/gnirehtet
-          (cd dist/stage/linux64 && zip -9 -j "../../gnirehtet-linux64-v${VERSION}.zip" ./*)
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-linux64-v${VERSION}.tar.gz" -C "../" "linux64")
 
           make_stage win64
           cp artifacts/relay-win64/gnirehtet.exe dist/stage/win64/gnirehtet.exe
           cp relay-rust/scripts/gnirehtet-run.cmd dist/stage/win64/gnirehtet-run.cmd
-          (cd dist/stage/win64 && zip -9 -j "../../gnirehtet-win64-v${VERSION}.zip" ./*)
+          (cd dist/stage/win64 && zip -9 -j -X "../../gnirehtet-win64-v${VERSION}.zip" ./*)
 
           make_stage macos-x64
           cp artifacts/relay-macos-x64/gnirehtet dist/stage/macos-x64/gnirehtet
           chmod +x dist/stage/macos-x64/gnirehtet
-          (cd dist/stage/macos-x64 && zip -9 -j "../../gnirehtet-macos-x64-v${VERSION}.zip" ./*)
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-macos-x64-v${VERSION}.tar.gz" -C "../" "macos-x64")
 
           make_stage macos-arm64
           cp artifacts/relay-macos-arm64/gnirehtet dist/stage/macos-arm64/gnirehtet
           chmod +x dist/stage/macos-arm64/gnirehtet
-          (cd dist/stage/macos-arm64 && zip -9 -j "../../gnirehtet-macos-arm64-v${VERSION}.zip" ./*)
+          (cd dist/stage && tar --owner=0 --group=0 --numeric-owner -czf "gnirehtet-macos-arm64-v${VERSION}.tar.gz" -C "../" "macos-arm64")
 
           for archive in dist/*.zip; do
             if unzip -Z1 "$archive" | grep -q '/'; then
