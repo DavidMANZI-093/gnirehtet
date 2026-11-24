@@ -19,7 +19,13 @@ use super::ipv4_packet::Ipv4Packet;
 use super::ipv6_header::IPV6_HEADER_LENGTH;
 use super::ipv6_packet::Ipv6Packet;
 
-pub const MAX_IP_PACKET_LENGTH: usize = IPV6_HEADER_LENGTH + 65535;
+/// Maximum IPv4 packet length, including the header.
+pub const MAX_IPV4_PACKET_LENGTH: usize = 65535;
+/// Maximum IPv6 packet length, including the header (40 + 65535 = 65575),
+/// see https://datatracker.ietf.org/doc/html/rfc1883
+pub const MAX_IPV6_PACKET_LENGTH: usize = IPV6_HEADER_LENGTH + 65535;
+/// Maximum IP packet length across both families.
+pub const MAX_IP_PACKET_LENGTH: usize = MAX_IPV6_PACKET_LENGTH;
 
 pub enum IpPacket<'a> {
     V4(Ipv4Packet<'a>),
@@ -32,7 +38,7 @@ impl<'a> IpPacket<'a> {
         let version = raw.first().map(|b| b >> 4)?;
         match version {
             4 => Ipv4Packet::parse(raw).map(IpPacket::V4),
-            6 => Some(IpPacket::V6(Ipv6Packet::parse(raw))),
+            6 => Ipv6Packet::parse(raw).map(IpPacket::V6),
             _ => None,
         }
     }
@@ -46,7 +52,7 @@ impl<'a> IpPacket<'a> {
     }
 
     #[inline]
-    pub fn length(&self) -> u16 {
+    pub fn length(&self) -> usize {
         match *self {
             IpPacket::V4(ref p) => p.length(),
             IpPacket::V6(ref p) => p.length(),
@@ -54,6 +60,7 @@ impl<'a> IpPacket<'a> {
     }
 
     #[inline]
+    #[allow(dead_code)]
     pub fn payload(&self) -> Option<&[u8]> {
         match *self {
             IpPacket::V4(ref p) => p.payload(),
@@ -80,13 +87,17 @@ impl<'a> IpPacket<'a> {
 }
 
 /// Peek IP version + total packet length for either v4 or v6.
-pub fn peek_version_length(raw: &[u8]) -> Option<(u8, u16)> {
-    if raw.is_empty() {
-        return None;
-    }
-    match raw[0] >> 4 {
+///
+/// The length is stored as `usize` because a maximum IPv6 packet
+/// (40 + 65535 = 65575 bytes) does not fit in a `u16`,
+/// see https://datatracker.ietf.org/doc/html/rfc1883
+pub fn peek_version_length(raw: &[u8]) -> Option<(u8, usize)> {
+    let version = *raw.first()? >> 4;
+    match version {
         4 => super::ipv4_header::peek_version_length(raw),
         6 => super::ipv6_header::peek_version_length(raw),
-        _ => None,
+        // Unknown version: report it so that the caller can drop the byte
+        // instead of blocking forever.
+        _ => Some((version, 0)),
     }
 }

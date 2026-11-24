@@ -200,8 +200,8 @@ impl<'a> Ipv4Packet<'a> {
     }
 
     #[inline]
-    pub fn length(&self) -> u16 {
-        self.ipv4_header_data.total_length()
+    pub fn length(&self) -> usize {
+        usize::from(self.ipv4_header_data.total_length())
     }
 
     pub fn payload(&self) -> Option<&[u8]> {

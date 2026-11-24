@@ -82,7 +82,7 @@ impl<'a> ClientChannel<'a> {
         selector: &mut Selector,
         ip_packet: &IpPacket,
     ) -> io::Result<()> {
-        if ip_packet.length() as usize <= self.network_to_client.remaining() {
+        if ip_packet.length() <= self.network_to_client.remaining() {
             self.network_to_client.read_from(ip_packet.raw());
             self.update_interests(selector);
             Ok(())
@@ -282,7 +282,7 @@ impl Client {
         selector: &mut Selector,
         ip_packet: &IpPacket,
     ) -> io::Result<()> {
-        if ip_packet.length() as usize <= self.network_to_client.remaining() {
+        if ip_packet.length() <= self.network_to_client.remaining() {
             self.network_to_client.read_from(ip_packet.raw());
             self.update_interests(selector);
             Ok(())

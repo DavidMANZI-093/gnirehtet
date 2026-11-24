@@ -18,7 +18,7 @@
 use std::io;
 
 use super::datagram::{DatagramReceiver, ReadAdapter};
-use super::ip_packet::IpPacket;
+use super::ip_packet::{IpPacket, MAX_IPV4_PACKET_LENGTH, MAX_IPV6_PACKET_LENGTH};
 use super::ipv4_header::{Ipv4Header, Ipv4HeaderData, Ipv4HeaderMut};
 use super::ipv4_packet::Ipv4Packet;
 use super::ipv6_header::{IPV6_HEADER_LENGTH, Ipv6Header, Ipv6HeaderData, Ipv6HeaderMut};
@@ -26,11 +26,11 @@ use super::ipv6_packet::Ipv6Packet;
 use super::transport_header::{TransportHeader, TransportHeaderData, TransportHeaderMut};
 
 /// Maximum packet size, including the largest possible IPv6 header and payload.
-pub const MAX_PACKET_LENGTH: usize = IPV6_HEADER_LENGTH + 65535;
+pub const MAX_PACKET_LENGTH: usize = MAX_IPV6_PACKET_LENGTH;
 
 /// Convert from level 5 to level 3 by appending correct IP and transport headers.
 pub struct Packetizer {
-    buffer: Box<[u8; MAX_PACKET_LENGTH]>,
+    buffer: Box<[u8; MAX_IPV4_PACKET_LENGTH]>,
     transport_index: usize,
     payload_index: usize,
     ipv4_header_data: Ipv4HeaderData,
@@ -42,7 +42,7 @@ impl Packetizer {
         reference_ipv4_header: &Ipv4Header,
         reference_transport_header: &TransportHeader,
     ) -> Self {
-        let mut buffer = Box::new([0; MAX_PACKET_LENGTH]);
+        let mut buffer = Box::new([0; MAX_IPV4_PACKET_LENGTH]);
 
         let transport_index = reference_ipv4_header.header_length() as usize;
         let payload_index = transport_index + reference_transport_header.header_length() as usize;
@@ -115,7 +115,9 @@ impl Packetizer {
     }
 
     fn build(&mut self, payload_length: u16) -> Ipv4Packet<'_> {
-        let total_length = self.payload_index as u16 + payload_length;
+        let total_length = self.payload_index + usize::from(payload_length);
+        debug_assert!(total_length <= MAX_IPV4_PACKET_LENGTH);
+        let total_length = total_length as u16;
 
         self.ipv4_header_mut().set_total_length(total_length);
         self.transport_header_mut()
@@ -133,7 +135,7 @@ impl Packetizer {
 
 /// Packetizer for IPv6 responses (no IP header checksum, payload length field).
 pub struct Ipv6Packetizer {
-    buffer: Box<[u8; MAX_PACKET_LENGTH]>,
+    buffer: Box<[u8; MAX_IPV6_PACKET_LENGTH]>,
     transport_index: usize,
     payload_index: usize,
     ipv6_header_data: Ipv6HeaderData,
@@ -145,7 +147,7 @@ impl Ipv6Packetizer {
         reference_ipv6_header: &Ipv6Header,
         reference_transport_header: &TransportHeader,
     ) -> Self {
-        let mut buffer = Box::new([0; MAX_PACKET_LENGTH]);
+        let mut buffer = Box::new([0; MAX_IPV6_PACKET_LENGTH]);
 
         let transport_index = IPV6_HEADER_LENGTH;
         let payload_index = transport_index + reference_transport_header.header_length() as usize;
@@ -210,12 +212,15 @@ impl Ipv6Packetizer {
     }
 
     fn build(&mut self, payload_length: u16) -> Ipv6Packet<'_> {
-        let transport_len = (self.payload_index - self.transport_index) as u16 + payload_length;
-        self.ipv6_header_mut().set_payload_length(transport_len);
+        let transport_len =
+            (self.payload_index - self.transport_index) + usize::from(payload_length);
+        debug_assert!(transport_len <= usize::from(u16::MAX));
+        self.ipv6_header_mut()
+            .set_payload_length(transport_len as u16);
         self.transport_header_mut()
             .set_payload_length(payload_length);
 
-        let total_length = self.payload_index + payload_length as usize;
+        let total_length = self.payload_index + usize::from(payload_length);
         let mut packet = Ipv6Packet::new(
             &mut self.buffer[..total_length],
             self.ipv6_header_data.clone(),

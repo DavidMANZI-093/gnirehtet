@@ -26,13 +26,16 @@ import java.nio.ByteBuffer;
 public class IPPacketOutputStream extends OutputStream {
   private static final String TAG = IPPacketOutputStream.class.getSimpleName();
 
-  private static final int MAX_IP_PACKET_LENGTH = (1 << 16) + 40; // max IPv6 packet: 40B header + 64K payload
+  // max IPv6 packet: 40B header + 65535B payload
+  static final int MAX_IP_PACKET_LENGTH = 40 + 65535;
+  private static final int MAX_IPV4_PACKET_LENGTH = 65535;
 
+  private static final int IPV4_MIN_HEADER_LENGTH = 20;
   private static final int IPV6_HEADER_LENGTH = 40;
 
   private final OutputStream target;
-  // must always accept 1 full packet + any partial packet
-  private final ByteBuffer buffer = ByteBuffer.allocate(2 * MAX_IP_PACKET_LENGTH);
+  // must always accept 1 full packet + any partial packet (hence the +1 margin)
+  private final ByteBuffer buffer = ByteBuffer.allocate(2 * (MAX_IP_PACKET_LENGTH + 1));
 
   public IPPacketOutputStream(OutputStream target) {
     this.target = target;
@@ -137,14 +140,23 @@ public class IPPacketOutputStream extends OutputStream {
         return -1;
       }
       // IPv6 payload length is 16 bits starting at offset 4, plus the 40B fixed header
-      return IPV6_HEADER_LENGTH + Binary.unsigned(buffer.getShort(buffer.position() + 4));
+      int packetLength =
+          IPV6_HEADER_LENGTH + Binary.unsigned(buffer.getShort(buffer.position() + 4));
+      if (packetLength > MAX_IP_PACKET_LENGTH) {
+        return -1;
+      }
+      return packetLength;
     }
     if (buffer.limit() < buffer.position() + 4) {
       // buffer does not even contain the length field
       return -1;
     }
     // IPv4 packet length is 16 bits starting at offset 2
-    return Binary.unsigned(buffer.getShort(buffer.position() + 2));
+    int packetLength = Binary.unsigned(buffer.getShort(buffer.position() + 2));
+    if (packetLength < IPV4_MIN_HEADER_LENGTH || packetLength > MAX_IPV4_PACKET_LENGTH) {
+      return -1;
+    }
+    return packetLength;
   }
 
   /**

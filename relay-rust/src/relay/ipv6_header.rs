@@ -41,8 +41,11 @@ pub struct Ipv6HeaderData {
 
 #[allow(dead_code)]
 impl Ipv6HeaderData {
-    pub fn parse(raw: &[u8]) -> Self {
-        Self {
+    pub fn parse(raw: &[u8]) -> Option<Self> {
+        if raw.len() < IPV6_HEADER_LENGTH || raw[0] >> 4 != 6 {
+            return None;
+        }
+        Some(Self {
             payload_length: binary::read_u16(&raw[4..6]),
             next_header: match raw[6] {
                 6 => Protocol::Tcp,
@@ -59,7 +62,7 @@ impl Ipv6HeaderData {
                 addr.copy_from_slice(&raw[24..40]);
                 addr
             },
-        }
+        })
     }
 
     pub fn bind<'c, 'a: 'c, 'b: 'c>(&'a self, raw: &'b [u8]) -> Ipv6Header<'c> {
@@ -78,9 +81,10 @@ impl Ipv6HeaderData {
         self.payload_length
     }
 
-    pub fn total_length(&self) -> u16 {
-        // saturate: jumbo payloads (>65535-40) are not supported, treat as max
-        (IPV6_HEADER_LENGTH as u32 + u32::from(self.payload_length)).min(u32::from(u16::MAX)) as u16
+    pub fn total_length(&self) -> usize {
+        // Jumbograms (payload_length == 0 with a Jumbo Payload option) are not
+        // supported; a zero payload length is treated as an empty payload.
+        IPV6_HEADER_LENGTH + usize::from(self.payload_length)
     }
 
     pub fn protocol(&self) -> Protocol {
@@ -100,8 +104,8 @@ impl Ipv6HeaderData {
     }
 }
 
-pub fn peek_version_length(raw: &[u8]) -> Option<(u8, u16)> {
-    if raw.len() < IPV6_HEADER_LENGTH {
+pub fn peek_version_length(raw: &[u8]) -> Option<(u8, usize)> {
+    if raw.len() < 6 {
         // not enough data to know the payload length
         return None;
     }
@@ -110,9 +114,7 @@ pub fn peek_version_length(raw: &[u8]) -> Option<(u8, u16)> {
         return None;
     }
     let payload_length = binary::read_u16(&raw[4..6]);
-    let length =
-        (IPV6_HEADER_LENGTH as u32 + u32::from(payload_length)).min(u32::from(u16::MAX)) as u16;
-    Some((version, length))
+    Some((version, IPV6_HEADER_LENGTH + usize::from(payload_length)))
 }
 
 // shared definition for Ipv6Header and Ipv6HeaderMut
@@ -136,7 +138,7 @@ macro_rules! ipv6_header_common {
                 self.data.header_length()
             }
 
-            pub fn total_length(&self) -> u16 {
+            pub fn total_length(&self) -> usize {
                 self.data.total_length()
             }
 
@@ -220,7 +222,7 @@ mod tests {
     #[test]
     fn parse_header() {
         let raw = &create_header()[..];
-        let data = Ipv6HeaderData::parse(raw);
+        let data = Ipv6HeaderData::parse(raw).unwrap();
         assert_eq!(12, data.payload_length());
         assert_eq!(52, data.total_length());
         assert_eq!(Protocol::Udp, data.protocol());
@@ -233,7 +235,7 @@ mod tests {
     #[test]
     fn edit_header() {
         let raw = &mut create_header()[..];
-        let mut header_data = Ipv6HeaderData::parse(raw);
+        let mut header_data = Ipv6HeaderData::parse(raw).unwrap();
         let mut header = header_data.bind_mut(raw);
 
         let src = [1u8; 16];

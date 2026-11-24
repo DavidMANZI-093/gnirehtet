@@ -72,6 +72,50 @@ public class TestIPPacketOutputStream {
   }
 
   @Test
+  public void testMaximumIPv6Packet() throws IOException {
+    ByteArrayOutputStream bos = new ByteArrayOutputStream();
+    IPPacketOutputStream pos = new IPPacketOutputStream(bos);
+
+    int packetLength = 40 + 65535;
+    ByteBuffer buffer = ByteBuffer.allocate(packetLength);
+    buffer.put((byte) (6 << 4)); // version
+    buffer.put((byte) 0);
+    buffer.putShort((short) 0); // flow label
+    buffer.putShort((short) 65535); // payload length
+    buffer.put((byte) 59); // no next header
+    buffer.put((byte) 64); // hop limit
+    buffer.position(packetLength);
+
+    byte[] rawPacket = buffer.array();
+    pos.write(rawPacket, 0, rawPacket.length);
+    Assert.assertEquals("Maximum IPv6 packet should be written", packetLength, bos.size());
+    Assert.assertTrue(
+        "Resulting array must be identical", Arrays.equals(rawPacket, bos.toByteArray()));
+  }
+
+  @Test
+  public void testReadPacketLength() {
+    ByteBuffer ipv6 = ByteBuffer.allocate(40);
+    ipv6.put((byte) (6 << 4));
+    ipv6.put((byte) 0);
+    ipv6.putShort((short) 0);
+    ipv6.putShort((short) 65535);
+    ipv6.flip();
+    ipv6.limit(ipv6.capacity()); // the fixed header is present (padded with zeros)
+    Assert.assertEquals(40 + 65535, IPPacketOutputStream.readPacketLength(ipv6, 6));
+
+    ByteBuffer ipv4 = ByteBuffer.allocate(20);
+    ipv4.put((byte) ((4 << 4) | 5));
+    ipv4.put((byte) 0);
+    ipv4.putShort((short) 20);
+    ipv4.flip();
+    Assert.assertEquals(20, IPPacketOutputStream.readPacketLength(ipv4, 4));
+
+    ipv4.putShort(2, (short) 10); // smaller than an IPv4 header
+    Assert.assertEquals(-1, IPPacketOutputStream.readPacketLength(ipv4, 4));
+  }
+
+  @Test
   public void testSeveralPacketsAtOnce() throws IOException {
     class CapturingOutputStream extends ByteArrayOutputStream {
       private int packetCount;

@@ -108,12 +108,12 @@ impl Ipv4HeaderData {
     }
 }
 
-pub fn peek_version_length(raw: &[u8]) -> Option<(u8, u16)> {
+pub fn peek_version_length(raw: &[u8]) -> Option<(u8, usize)> {
     if raw.len() >= 4 {
         // version is stored in the 4 first bits
         let version = raw[0] >> 4;
         // packet length is 16 bits starting at offset 2
-        let length = binary::read_u16(&raw[2..4]);
+        let length = usize::from(binary::read_u16(&raw[2..4]));
         Some((version, length))
     } else {
         None

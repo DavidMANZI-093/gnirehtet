@@ -1096,7 +1096,7 @@ mod tests {
 
         {
             let packet = connection.get().unwrap();
-            assert_eq!(total_length as u16, packet.length());
+            assert_eq!(total_length, packet.length());
             assert_eq!(payload_length, packet.payload().unwrap().len());
         }
 
@@ -1126,7 +1126,7 @@ mod tests {
         }
 
         let packet = connection.get().unwrap();
-        assert_eq!(total_length as u16, packet.length());
+        assert_eq!(total_length, packet.length());
         assert_eq!(payload_length, packet.payload().unwrap().len());
     }
 }
