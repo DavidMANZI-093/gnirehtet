@@ -132,7 +132,7 @@ dependencies = [
 
 [[package]]
 name = "gnirehtet"
-version = "2.6.3"
+version = "2.7.0"
 dependencies = [
  "atomic_enum",
  "clap",

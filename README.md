@@ -1,4 +1,4 @@
-## Gnirehtet (v2.6.3) - Community Edition
+## Gnirehtet (v2.7.0) - Community Edition
 
 [![check](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml/badge.svg)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/check.yml)
 [![audit](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml/badge.svg)](https://github.com/DavidMANZI-093/gnirehtet/actions/workflows/audit.yml)
@@ -63,18 +63,18 @@ Download the [latest release][latest].
 
 [latest]: https://github.com/DavidMANZI-093/gnirehtet/releases/latest
 
-- **Linux:** [`gnirehtet-linux64-v2.6.3.tar.gz`][direct-linux64]
-- **Windows:** [`gnirehtet-win64-v2.6.3.zip`][direct-win64]
-- **macOS Intel:** [`gnirehtet-macos-x64-v2.6.3.tar.gz`][direct-macos-x64]
-- **macOS Apple Silicon:** [`gnirehtet-macos-arm64-v2.6.3.tar.gz`][direct-macos-arm64]
+- **Linux:** [`gnirehtet-linux64-v2.7.0.tar.gz`][direct-linux64]
+- **Windows:** [`gnirehtet-win64-v2.7.0.zip`][direct-win64]
+- **macOS Intel:** [`gnirehtet-macos-x64-v2.7.0.tar.gz`][direct-macos-x64]
+- **macOS Apple Silicon:** [`gnirehtet-macos-arm64-v2.7.0.tar.gz`][direct-macos-arm64]
 
 Checksums are available in [`SHA256SUMS`][sha256sums].
 
-[direct-linux64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.3/gnirehtet-linux64-v2.6.3.tar.gz
-[direct-win64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.3/gnirehtet-win64-v2.6.3.zip
-[direct-macos-x64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.3/gnirehtet-macos-x64-v2.6.3.tar.gz
-[direct-macos-arm64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.3/gnirehtet-macos-arm64-v2.6.3.tar.gz
-[sha256sums]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.6.3/SHA256SUMS
+[direct-linux64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.7.0/gnirehtet-linux64-v2.7.0.tar.gz
+[direct-win64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.7.0/gnirehtet-win64-v2.7.0.zip
+[direct-macos-x64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.7.0/gnirehtet-macos-x64-v2.7.0.tar.gz
+[direct-macos-arm64]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.7.0/gnirehtet-macos-arm64-v2.7.0.tar.gz
+[sha256sums]: https://github.com/DavidMANZI-093/gnirehtet/releases/download/v2.7.0/SHA256SUMS
 
 Then extract it.
 
