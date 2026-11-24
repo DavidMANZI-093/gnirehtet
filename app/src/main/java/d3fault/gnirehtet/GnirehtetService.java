@@ -32,6 +32,7 @@ import android.os.Message;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import java.io.IOException;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -47,6 +48,7 @@ public class GnirehtetService extends VpnService {
   private static final String TAG = GnirehtetService.class.getSimpleName();
 
   private static final InetAddress VPN_ADDRESS = Net.toInetAddress(new byte[] {10, 0, 0, 2});
+  private static final InetAddress VPN_ADDRESS_V6 = Net.toInetAddress("fd00::2");
   // magic value: higher (like 0x8000 or 0xffff) or lower (like 1500) values show poorer
   // performances
   private static final int MTU = 0x4000;
@@ -122,14 +124,29 @@ public class GnirehtetService extends VpnService {
     }
   }
 
+  private static boolean hasIpv6Route(CIDR[] routes) {
+    for (CIDR route : routes) {
+      if (route.getAddress() instanceof Inet6Address) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private boolean setupVpn(VpnConfiguration config) {
     Builder builder = new Builder();
     builder.addAddress(VPN_ADDRESS, 32);
     builder.setSession(getString(R.string.app_name));
 
     CIDR[] routes = config.getRoutes();
+    // IPv6 is opt-in: only set it up when an IPv6 route was explicitly
+    // requested, otherwise IPv6 traffic must not be captured.
+    boolean ipv6 = hasIpv6Route(routes);
+    if (ipv6) {
+      builder.addAddress(VPN_ADDRESS_V6, 128);
+    }
     if (routes.length == 0) {
-      // no routes defined, redirect the whole network traffic
+      // no routes defined (legacy start): redirect IPv4 traffic only
       builder.addRoute("0.0.0.0", 0);
     } else {
       for (CIDR route : routes) {
@@ -141,6 +158,9 @@ public class GnirehtetService extends VpnService {
     if (dnsServers.length == 0) {
       // no DNS server defined, use Google DNS
       builder.addDnsServer("8.8.8.8");
+      if (ipv6) {
+        builder.addDnsServer("2001:4860:4860::8888");
+      }
     } else {
       for (InetAddress dnsServer : dnsServers) {
         builder.addDnsServer(dnsServer);
@@ -185,7 +205,8 @@ public class GnirehtetService extends VpnService {
         new ConnectivityManager.NetworkCallback() {
           private void scan(Network network, LinkProperties lp) {
             for (LinkAddress addr : lp.getLinkAddresses()) {
-              if (addr.getAddress().equals(VPN_ADDRESS)) {
+              if (addr.getAddress().equals(VPN_ADDRESS)
+                  || addr.getAddress().equals(VPN_ADDRESS_V6)) {
                 found.set(network);
                 latch.countDown();
               }

@@ -33,9 +33,12 @@ mod datagram;
 mod datagram_buffer;
 #[macro_use]
 mod interrupt;
+mod ip_packet;
+mod ip_packet_buffer;
 mod ipv4_header;
 mod ipv4_packet;
-mod ipv4_packet_buffer;
+mod ipv6_header;
+mod ipv6_packet;
 mod net;
 mod packet_source;
 mod packetizer;

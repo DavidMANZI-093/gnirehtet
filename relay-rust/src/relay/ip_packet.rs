@@ -1,0 +1,103 @@
+/*
+ * Copyright (C) 2017 Genymobile
+ * Copyright (C) 2026 David MANZI
+ *
+ * Licensed under the Apache License, Version 2.0 (the "License");
+ * you may not use this file except in compliance with the License.
+ * You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+use super::ipv4_packet::Ipv4Packet;
+use super::ipv6_header::IPV6_HEADER_LENGTH;
+use super::ipv6_packet::Ipv6Packet;
+
+/// Maximum IPv4 packet length, including the header.
+pub const MAX_IPV4_PACKET_LENGTH: usize = 65535;
+/// Maximum IPv6 packet length, including the header (40 + 65535 = 65575),
+/// see https://datatracker.ietf.org/doc/html/rfc1883
+pub const MAX_IPV6_PACKET_LENGTH: usize = IPV6_HEADER_LENGTH + 65535;
+/// Maximum IP packet length across both families.
+pub const MAX_IP_PACKET_LENGTH: usize = MAX_IPV6_PACKET_LENGTH;
+
+pub enum IpPacket<'a> {
+    V4(Ipv4Packet<'a>),
+    V6(Ipv6Packet<'a>),
+}
+
+impl<'a> IpPacket<'a> {
+    /// Parse a raw packet, dispatching on its IP version.
+    pub fn parse(raw: &'a mut [u8]) -> Option<Self> {
+        let version = raw.first().map(|b| b >> 4)?;
+        match version {
+            4 => Ipv4Packet::parse(raw).map(IpPacket::V4),
+            6 => Ipv6Packet::parse(raw).map(IpPacket::V6),
+            _ => None,
+        }
+    }
+
+    #[inline]
+    pub fn raw(&self) -> &[u8] {
+        match *self {
+            IpPacket::V4(ref p) => p.raw(),
+            IpPacket::V6(ref p) => p.raw(),
+        }
+    }
+
+    #[inline]
+    pub fn length(&self) -> usize {
+        match *self {
+            IpPacket::V4(ref p) => p.length(),
+            IpPacket::V6(ref p) => p.length(),
+        }
+    }
+
+    #[inline]
+    #[allow(dead_code)]
+    pub fn payload(&self) -> Option<&[u8]> {
+        match *self {
+            IpPacket::V4(ref p) => p.payload(),
+            IpPacket::V6(ref p) => p.payload(),
+        }
+    }
+
+    #[inline]
+    pub fn is_valid(&self) -> bool {
+        match *self {
+            IpPacket::V4(ref p) => p.is_valid(),
+            IpPacket::V6(ref p) => p.is_valid(),
+        }
+    }
+
+    #[inline]
+    #[allow(dead_code)]
+    pub fn version(&self) -> u8 {
+        match *self {
+            IpPacket::V4(_) => 4,
+            IpPacket::V6(_) => 6,
+        }
+    }
+}
+
+/// Peek IP version + total packet length for either v4 or v6.
+///
+/// The length is stored as `usize` because a maximum IPv6 packet
+/// (40 + 65535 = 65575 bytes) does not fit in a `u16`,
+/// see https://datatracker.ietf.org/doc/html/rfc1883
+pub fn peek_version_length(raw: &[u8]) -> Option<(u8, usize)> {
+    let version = *raw.first()? >> 4;
+    match version {
+        4 => super::ipv4_header::peek_version_length(raw),
+        6 => super::ipv6_header::peek_version_length(raw),
+        // Unknown version: report it so that the caller can drop the byte
+        // instead of blocking forever.
+        _ => Some((version, 0)),
+    }
+}

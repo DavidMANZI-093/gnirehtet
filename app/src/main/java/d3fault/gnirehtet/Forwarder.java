@@ -36,7 +36,8 @@ public class Forwarder {
 
   private static final String TAG = Forwarder.class.getSimpleName();
 
-  private static final int BUFSIZE = 0x10000;
+  // +1 margin: a single read/write may carry one full packet plus a partial one
+  private static final int BUFSIZE = IPPacketOutputStream.MAX_IP_PACKET_LENGTH + 1;
 
   private static final byte[] DUMMY_ADDRESS = {42, 42, 42, 42};
   private static final int DUMMY_PORT = 4242;
@@ -103,8 +104,8 @@ public class Forwarder {
         break;
       }
       if (r > 0) {
-        int version = buffer[0] >> 4;
-        if (version == 4) {
+        int version = (buffer[0] & 0xf0) >> 4;
+        if (version == 4 || version == 6) {
           // blocking send
           tunnel.send(buffer, r);
         } else {

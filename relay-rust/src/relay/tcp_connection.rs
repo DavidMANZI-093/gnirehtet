@@ -28,10 +28,11 @@ use std::rc::{Rc, Weak};
 use super::binary;
 use super::client::{Client, ClientChannel};
 use super::connection::{Connection, ConnectionId};
+use super::ip_packet::IpPacket;
 use super::ipv4_header::Ipv4Header;
-use super::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
+use super::ipv6_header::Ipv6Header;
 use super::packet_source::PacketSource;
-use super::packetizer::Packetizer;
+use super::packetizer::{AnyPacketizer, MAX_PACKET_LENGTH};
 use super::selector::Selector;
 use super::stream_buffer::StreamBuffer;
 use super::tcp_header::{self, TcpHeader, TcpHeaderMut};
@@ -41,8 +42,10 @@ const TAG: &str = "TcpConnection";
 
 // same value as GnirehtetService.MTU in the client
 const MTU: u16 = 0x4000;
-// 20 bytes for IP headers, 20 bytes for TCP headers
+// 20 bytes for IPv4 headers, 20 bytes for TCP headers
 const MAX_PAYLOAD_LENGTH: u16 = MTU - 20 - 20_u16;
+// 40 bytes for IPv6 headers, 20 bytes for TCP headers
+const MAX_PAYLOAD_LENGTH_V6: u16 = MTU - 40 - 20_u16;
 
 struct PendingPacket {
     raw: Vec<u8>,
@@ -57,7 +60,7 @@ pub struct TcpConnection {
     interests: Option<Interest>,
     token: Token,
     client_to_network: StreamBuffer,
-    network_to_client: Packetizer,
+    network_to_client: AnyPacketizer,
     pending_packet: Option<PendingPacket>,
     pending_ack: bool,
     closed: bool,
@@ -139,16 +142,35 @@ impl Tcb {
 
 impl TcpConnection {
     #[allow(clippy::needless_pass_by_value)] // semantically, headers are consumed
-    pub fn create(
+    pub fn create_v4(
         selector: &mut Selector,
         id: ConnectionId,
         client: Weak<RefCell<Client>>,
         ipv4_header: Ipv4Header,
         transport_header: TransportHeader,
     ) -> io::Result<Rc<RefCell<Self>>> {
-        cx_info!(target: TAG, id, "Open");
+        let packetizer = Self::create_packetizer_v4(&ipv4_header, transport_header);
         let stream = Self::create_stream(&id)?;
+        Self::create_with_packetizer(selector, id, client, stream, packetizer)
+    }
 
+    #[allow(clippy::needless_pass_by_value)] // semantically, headers are consumed
+    pub fn create_v6(
+        selector: &mut Selector,
+        id: ConnectionId,
+        client: Weak<RefCell<Client>>,
+        ipv6_header: Ipv6Header,
+        transport_header: TransportHeader,
+    ) -> io::Result<Rc<RefCell<Self>>> {
+        let packetizer = Self::create_packetizer_v6(&ipv6_header, transport_header);
+        let stream = Self::create_stream(&id)?;
+        Self::create_with_packetizer(selector, id, client, stream, packetizer)
+    }
+
+    fn create_packetizer_v4(
+        ipv4_header: &Ipv4Header,
+        transport_header: TransportHeader,
+    ) -> AnyPacketizer {
         let tcp_header = Self::tcp_header_of_transport(transport_header);
 
         // shrink the TCP options to pass a minimal refrence header to the packetizer
@@ -166,7 +188,41 @@ impl TcpConnection {
             .bind(&shrinked_tcp_header_raw)
             .into();
 
-        let packetizer = Packetizer::new(&ipv4_header, &shrinked_transport_header);
+        AnyPacketizer::new_v4(ipv4_header, &shrinked_transport_header)
+    }
+
+    fn create_packetizer_v6(
+        ipv6_header: &Ipv6Header,
+        transport_header: TransportHeader,
+    ) -> AnyPacketizer {
+        let tcp_header = Self::tcp_header_of_transport(transport_header);
+
+        // shrink the TCP options to pass a minimal refrence header to the packetizer
+        let mut shrinked_tcp_header_raw = [0u8; 20];
+        shrinked_tcp_header_raw.copy_from_slice(&tcp_header.raw()[..20]);
+        let mut shrinked_tcp_header_data = tcp_header.data().clone();
+        {
+            let mut shrinked_tcp_header =
+                shrinked_tcp_header_data.bind_mut(&mut shrinked_tcp_header_raw);
+            shrinked_tcp_header.shrink_options();
+            assert_eq!(20, shrinked_tcp_header.header_length());
+        }
+
+        let shrinked_transport_header = shrinked_tcp_header_data
+            .bind(&shrinked_tcp_header_raw)
+            .into();
+
+        AnyPacketizer::new_v6(ipv6_header, &shrinked_transport_header)
+    }
+
+    fn create_with_packetizer(
+        selector: &mut Selector,
+        id: ConnectionId,
+        client: Weak<RefCell<Client>>,
+        stream: TcpStream,
+        packetizer: AnyPacketizer,
+    ) -> io::Result<Rc<RefCell<Self>>> {
+        cx_info!(target: TAG, id, "Open");
 
         // interests will be set on the first packet received
         // set the initial value now so that they won't need to be updated
@@ -203,7 +259,7 @@ impl TcpConnection {
     }
 
     fn create_stream(id: &ConnectionId) -> io::Result<TcpStream> {
-        TcpStream::connect(id.rewritten_destination().into())
+        TcpStream::connect(id.rewritten_destination())
     }
 
     fn remove_from_router(&self) {
@@ -309,8 +365,12 @@ impl TcpConnection {
     fn process_receive(&mut self, selector: &mut Selector) -> io::Result<()> {
         while self.may_read() {
             let remaining_client_window = self.tcb.remaining_client_window();
-            let max_payload_length =
-                Some(cmp::min(remaining_client_window, MAX_PAYLOAD_LENGTH) as usize);
+            let max_payload = if self.network_to_client.is_ipv6() {
+                MAX_PAYLOAD_LENGTH_V6
+            } else {
+                MAX_PAYLOAD_LENGTH
+            };
+            let max_payload_length = Some(cmp::min(remaining_client_window, max_payload) as usize);
             Self::update_headers(
                 &mut self.network_to_client,
                 &self.tcb,
@@ -320,9 +380,12 @@ impl TcpConnection {
                 .network_to_client
                 .packetize_read(&mut self.stream, max_payload_length)
             {
-                Ok(Some(ipv4_packet)) => {
-                    let payload_length = ipv4_packet.payload().unwrap().len();
-                    match Self::send_to_client(&self.client, selector, &ipv4_packet) {
+                Ok(Some(ip_packet)) => {
+                    let payload_length = match ip_packet {
+                        IpPacket::V4(ref p) => p.payload().unwrap().len(),
+                        IpPacket::V6(ref p) => p.payload().unwrap().len(),
+                    };
+                    match Self::send_to_client(&self.client, selector, &ip_packet) {
                         Ok(_) => {
                             cx_debug!(
                                 target: TAG,
@@ -338,7 +401,7 @@ impl TcpConnection {
                         Err(_) => {
                             // the packetizer buffer is reused for control packets, keeping an
                             // owned copy until the client can accept it.
-                            let raw = ipv4_packet.raw().to_vec();
+                            let raw = ip_packet.raw().to_vec();
                             let client_rc =
                                 self.client.upgrade().expect("Expected client not found");
                             let mut client = client_rc.borrow_mut();
@@ -385,11 +448,11 @@ impl TcpConnection {
     fn send_to_client(
         client: &Weak<RefCell<Client>>,
         selector: &mut Selector,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) -> io::Result<()> {
         let client_rc = client.upgrade().expect("Expected client not found");
         let mut client = client_rc.borrow_mut();
-        client.send_to_client(selector, ipv4_packet)
+        client.send_to_client(selector, ip_packet)
     }
 
     /// Borrow self.client and send empty packet to it
@@ -412,13 +475,13 @@ impl TcpConnection {
         flags: u16,
     ) {
         let is_pure_ack = flags == tcp_header::FLAG_ACK;
-        let ipv4_packet = Self::create_empty_response_packet(
+        let ip_packet = Self::create_empty_response_packet(
             &self.id,
             &mut self.network_to_client,
             &self.tcb,
             flags,
         );
-        match client_channel.send_to_client(selector, &ipv4_packet) {
+        match client_channel.send_to_client(selector, &ip_packet) {
             Ok(()) => {
                 if (flags & tcp_header::FLAG_ACK) != 0 {
                     // A newer ACK makes any deferred ACK redundant.
@@ -495,15 +558,19 @@ impl TcpConnection {
     }
 
     #[inline]
-    fn tcp_header_of_packet<'a>(ipv4_packet: &'a Ipv4Packet) -> TcpHeader<'a> {
-        if let Some(TransportHeader::Tcp(tcp_header)) = ipv4_packet.transport_header() {
+    fn tcp_header_of_packet<'a>(ip_packet: &'a IpPacket) -> TcpHeader<'a> {
+        let transport = match *ip_packet {
+            IpPacket::V4(ref p) => p.transport_header(),
+            IpPacket::V6(ref p) => p.transport_header(),
+        };
+        if let Some(TransportHeader::Tcp(tcp_header)) = transport {
             tcp_header
         } else {
             panic!("Not a TCP packet");
         }
     }
 
-    fn update_headers(packetizer: &mut Packetizer, tcb: &Tcb, flags: u16) {
+    fn update_headers(packetizer: &mut AnyPacketizer, tcb: &Tcb, flags: u16) {
         let mut tcp_header = Self::tcp_header_of_transport_mut(packetizer.transport_header_mut());
         tcp_header.set_sequence_number(tcb.sequence_number.0);
         tcp_header.set_acknowledgement_number(tcb.acknowledgement_number.0);
@@ -514,16 +581,16 @@ impl TcpConnection {
         &mut self,
         selector: &mut Selector,
         client_channel: &mut ClientChannel,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) {
-        let tcp_header = Self::tcp_header_of_packet(ipv4_packet);
+        let tcp_header = Self::tcp_header_of_packet(ip_packet);
         if self.tcb.state == TcpState::Init {
-            self.handle_first_packet(selector, client_channel, ipv4_packet);
+            self.handle_first_packet(selector, client_channel, ip_packet);
             return;
         }
 
         if tcp_header.is_syn() {
-            self.handle_duplicate_syn(selector, client_channel, ipv4_packet);
+            self.handle_duplicate_syn(selector, client_channel, ip_packet);
             return;
         }
 
@@ -569,7 +636,7 @@ impl TcpConnection {
                 tcp_header.acknowledgement_number()
             );
 
-            self.handle_ack(selector, client_channel, ipv4_packet);
+            self.handle_ack(selector, client_channel, ip_packet);
         }
 
         if tcp_header.is_fin() {
@@ -588,10 +655,10 @@ impl TcpConnection {
         &mut self,
         selector: &mut Selector,
         client_channel: &mut ClientChannel,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) {
         cx_debug!(target: TAG, self.id, "handle_first_packet()");
-        let tcp_header = Self::tcp_header_of_packet(ipv4_packet);
+        let tcp_header = Self::tcp_header_of_packet(ip_packet);
         if tcp_header.is_syn() {
             let their_sequence_number = tcp_header.sequence_number();
             self.tcb.acknowledgement_number = Wrapping(their_sequence_number) + Wrapping(1);
@@ -629,9 +696,9 @@ impl TcpConnection {
         &mut self,
         selector: &mut Selector,
         client_channel: &mut ClientChannel,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) {
-        let tcp_header = Self::tcp_header_of_packet(ipv4_packet);
+        let tcp_header = Self::tcp_header_of_packet(ip_packet);
         let their_sequence_number = tcp_header.sequence_number();
         if self.tcb.state == TcpState::SynSent {
             // the connection is not established yet, we can accept this packet as if it were the
@@ -717,7 +784,7 @@ impl TcpConnection {
         &mut self,
         _selector: &mut Selector,
         _client_channel: &mut ClientChannel,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) {
         cx_debug!(target: TAG, self.id, "handle_ack()");
         if self.tcb.state == TcpState::SynReceived {
@@ -731,11 +798,14 @@ impl TcpConnection {
                 target: TAG,
                 self.id,
                 "{}",
-                binary::build_packet_string(ipv4_packet.raw())
+                binary::build_packet_string(ip_packet.raw())
             );
         }
 
-        let payload = ipv4_packet.payload().expect("No payload");
+        let payload = match *ip_packet {
+            IpPacket::V4(ref p) => p.payload().expect("No payload"),
+            IpPacket::V6(ref p) => p.payload().expect("No payload"),
+        };
         if payload.is_empty() {
             // no data to transmit
             return;
@@ -752,10 +822,10 @@ impl TcpConnection {
 
     fn create_empty_response_packet<'a>(
         id: &ConnectionId,
-        packetizer: &'a mut Packetizer,
+        packetizer: &'a mut AnyPacketizer,
         tcb: &Tcb,
         flags: u16,
-    ) -> Ipv4Packet<'a> {
+    ) -> IpPacket<'a> {
         Self::update_headers(packetizer, tcb, flags);
         cx_debug!(
             target: TAG,
@@ -767,16 +837,16 @@ impl TcpConnection {
         if (flags & tcp_header::FLAG_ACK) != 0 {
             cx_debug!(target: TAG, id, "Acking {}", tcb.numbers());
         }
-        let ipv4_packet = packetizer.packetize_empty_payload();
+        let ip_packet = packetizer.packetize_empty_payload();
         if logger::is_enabled(LevelFilter::Trace) {
             cx_trace!(
                 target: TAG,
                 id,
                 "{}",
-                binary::build_packet_string(ipv4_packet.raw())
+                binary::build_packet_string(ip_packet.raw())
             );
         }
-        ipv4_packet
+        ip_packet
     }
 
     fn update_interests(&mut self, selector: &mut Selector) {
@@ -849,10 +919,10 @@ impl Connection for TcpConnection {
         &mut self,
         selector: &mut Selector,
         client_channel: &mut ClientChannel,
-        ipv4_packet: &Ipv4Packet,
+        ip_packet: &IpPacket,
     ) {
         self.flush_pending_ack_with_channel(selector, client_channel);
-        self.handle_packet(selector, client_channel, ipv4_packet);
+        self.handle_packet(selector, client_channel, ip_packet);
         if !self.closed {
             self.update_interests(selector);
         }
@@ -890,10 +960,10 @@ impl Connection for TcpConnection {
 }
 
 impl PacketSource for TcpConnection {
-    fn get(&mut self) -> Option<Ipv4Packet<'_>> {
+    fn get(&mut self) -> Option<IpPacket<'_>> {
         self.pending_packet
             .as_mut()
-            .and_then(|pending| Ipv4Packet::parse(&mut pending.raw[..]))
+            .and_then(|pending| IpPacket::parse(&mut pending.raw[..]))
     }
 
     fn next(&mut self, selector: &mut Selector) {
@@ -925,9 +995,9 @@ mod tests {
 
     use super::{PendingPacket, Tcb, TcpConnection};
     use crate::relay::connection::ConnectionId;
-    use crate::relay::ipv4_packet::{Ipv4Packet, MAX_PACKET_LENGTH};
+    use crate::relay::ipv4_packet::Ipv4Packet;
     use crate::relay::packet_source::PacketSource;
-    use crate::relay::packetizer::Packetizer;
+    use crate::relay::packetizer::{AnyPacketizer, MAX_PACKET_LENGTH};
     use crate::relay::selector::Selector;
     use crate::relay::stream_buffer::StreamBuffer;
 
@@ -956,15 +1026,15 @@ mod tests {
         raw
     }
 
-    fn create_packetizer() -> Packetizer {
+    fn create_packetizer() -> AnyPacketizer {
         let raw = &mut create_tcp_packet()[..];
         let packet = Ipv4Packet::parse(raw).unwrap();
         let (ipv4_header, transport_header) = packet.headers();
-        Packetizer::new(&ipv4_header, &transport_header.unwrap())
+        AnyPacketizer::new_v4(&ipv4_header, &transport_header.unwrap())
     }
 
     fn create_connection(
-        packetizer: Packetizer,
+        packetizer: AnyPacketizer,
         pending_packet: Option<PendingPacket>,
     ) -> TcpConnection {
         let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
@@ -998,7 +1068,10 @@ mod tests {
         }
     }
 
-    fn create_pending_packet(packetizer: &mut Packetizer, payload_length: usize) -> PendingPacket {
+    fn create_pending_packet(
+        packetizer: &mut AnyPacketizer,
+        payload_length: usize,
+    ) -> PendingPacket {
         let mut cursor = Cursor::new(vec![0u8; payload_length]);
         let packet = packetizer
             .packetize_read(&mut cursor, None)
@@ -1023,7 +1096,7 @@ mod tests {
 
         {
             let packet = connection.get().unwrap();
-            assert_eq!(total_length as u16, packet.length());
+            assert_eq!(total_length, packet.length());
             assert_eq!(payload_length, packet.payload().unwrap().len());
         }
 
@@ -1053,7 +1126,7 @@ mod tests {
         }
 
         let packet = connection.get().unwrap();
-        assert_eq!(total_length as u16, packet.length());
+        assert_eq!(total_length, packet.length());
         assert_eq!(payload_length, packet.payload().unwrap().len());
     }
 }
