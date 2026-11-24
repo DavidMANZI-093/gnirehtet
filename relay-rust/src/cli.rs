@@ -23,8 +23,32 @@ use clap::{Parser, Subcommand};
 pub const DEFAULT_PORT: u16 = 31416;
 /// DNS server used when the client does not specify any.
 pub const DEFAULT_DNS_SERVERS: &str = "8.8.8.8";
-/// Routes used when the client does not specify any (dual-stack).
-pub const DEFAULT_ROUTES: &str = "0.0.0.0/0,::/0";
+/// Routes used when the client does not specify any (IPv4 only).
+///
+/// IPv6 is opt-in, because capturing it on a host without working IPv6
+/// connectivity would black-hole IPv6-preferring traffic.
+pub const DEFAULT_ROUTES: &str = "0.0.0.0/0";
+
+/// Route added by `-6`/`--ipv6` when no IPv6 route is already configured.
+pub const IPV6_DEFAULT_ROUTE: &str = "::/0";
+
+/// Whether the route list contains at least one IPv6 route.
+pub fn contains_ipv6_route(routes: &str) -> bool {
+    routes.split(',').any(|route| {
+        let address = route.trim().split_once('/').map_or(route, |(a, _)| a);
+        address.contains(':')
+    })
+}
+
+/// Append the default IPv6 route when IPv6 is requested and not already
+/// covered by an explicit route.
+pub fn enable_ipv6(routes: &str, ipv6: bool) -> String {
+    if ipv6 && !contains_ipv6_route(routes) {
+        format!("{routes},{IPV6_DEFAULT_ROUTE}")
+    } else {
+        routes.to_string()
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -106,6 +130,12 @@ pub enum Command {
             value_parser = parse_port
         )]
         port: u16,
+
+        /// Also reverse tether IPv6 traffic (::/0).
+        ///
+        /// This requires working IPv6 connectivity on the host.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
     },
 
     /// Enable reverse tethering for all devices.
@@ -139,6 +169,12 @@ pub enum Command {
             value_parser = parse_port
         )]
         port: u16,
+
+        /// Also reverse tether IPv6 traffic (::/0).
+        ///
+        /// This requires working IPv6 connectivity on the host.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
     },
 
     /// Start a client on the Android device and exit.
@@ -149,7 +185,9 @@ pub enum Command {
     /// server(s). Otherwise, use 8.8.8.8 (Google public DNS).
     ///
     /// If -r is given, then only reverse tether the specified routes.
-    /// Otherwise, use 0.0.0.0/0 and ::/0 (redirect the whole traffic).
+    /// Otherwise, use 0.0.0.0/0 (redirect the whole IPv4 traffic). Pass -6 to
+    /// also redirect IPv6 traffic (::/0); it requires working IPv6
+    /// connectivity on the host.
     ///
     /// If -p is given, then make the relay server listen on the specified
     /// port. Otherwise, use port 31416.
@@ -189,6 +227,12 @@ pub enum Command {
             value_parser = parse_port
         )]
         port: u16,
+
+        /// Also reverse tether IPv6 traffic (::/0).
+        ///
+        /// This requires working IPv6 connectivity on the host.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
     },
 
     /// Listen for device connections and start a client on every detected
@@ -223,6 +267,12 @@ pub enum Command {
             value_parser = parse_port
         )]
         port: u16,
+
+        /// Also reverse tether IPv6 traffic (::/0).
+        ///
+        /// This requires working IPv6 connectivity on the host.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
     },
 
     /// Stop the client on the Android device and exit.
@@ -266,6 +316,12 @@ pub enum Command {
             value_parser = parse_port
         )]
         port: u16,
+
+        /// Also reverse tether IPv6 traffic (::/0).
+        ///
+        /// This requires working IPv6 connectivity on the host.
+        #[arg(short = '6', long = "ipv6")]
+        ipv6: bool,
     },
 
     /// Set up the 'adb reverse' tunnel.
@@ -378,12 +434,52 @@ mod tests {
     }
 
     #[test]
-    fn default_routes_are_dual_stack() {
+    fn default_routes_are_ipv4_only() {
         let cli = Cli::try_parse_from(["gnirehtet", "run"]).unwrap();
         match cli.cmd {
-            Command::Run { routes, .. } => assert_eq!("0.0.0.0/0,::/0", routes),
+            Command::Run { routes, ipv6, .. } => {
+                assert_eq!("0.0.0.0/0", routes);
+                assert!(!ipv6);
+            }
             _ => panic!("expected run command"),
         }
+    }
+
+    #[test]
+    fn ipv6_flag_adds_default_route() {
+        let cli = Cli::try_parse_from(["gnirehtet", "run", "-6"]).unwrap();
+        match cli.cmd {
+            Command::Run { routes, ipv6, .. } => {
+                assert!(ipv6);
+                assert_eq!("0.0.0.0/0,::/0", super::enable_ipv6(&routes, ipv6));
+            }
+            _ => panic!("expected run command"),
+        }
+    }
+
+    #[test]
+    fn ipv6_flag_is_available_on_all_client_commands() {
+        for command in ["run", "autorun", "start", "autostart", "restart"] {
+            let cli = Cli::try_parse_from(["gnirehtet", command, "--ipv6"]).unwrap();
+            match cli.cmd {
+                Command::Run { ipv6, .. }
+                | Command::Autorun { ipv6, .. }
+                | Command::Start { ipv6, .. }
+                | Command::Autostart { ipv6, .. }
+                | Command::Restart { ipv6, .. } => assert!(ipv6, "{command} should accept --ipv6"),
+                _ => panic!("unexpected command {command}"),
+            }
+        }
+    }
+
+    #[test]
+    fn explicit_ipv6_route_is_not_duplicated() {
+        assert_eq!(
+            "0.0.0.0/0,fd00::/8",
+            super::enable_ipv6("0.0.0.0/0,fd00::/8", true)
+        );
+        assert_eq!("0.0.0.0/0,::/0", super::enable_ipv6("0.0.0.0/0,::/0", true));
+        assert_eq!("0.0.0.0/0", super::enable_ipv6("0.0.0.0/0", false));
     }
 
     #[test]

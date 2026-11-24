@@ -32,6 +32,7 @@ import android.os.Message;
 import android.os.ParcelFileDescriptor;
 import android.util.Log;
 import java.io.IOException;
+import java.net.Inet6Address;
 import java.net.InetAddress;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -123,17 +124,30 @@ public class GnirehtetService extends VpnService {
     }
   }
 
+  private static boolean hasIpv6Route(CIDR[] routes) {
+    for (CIDR route : routes) {
+      if (route.getAddress() instanceof Inet6Address) {
+        return true;
+      }
+    }
+    return false;
+  }
+
   private boolean setupVpn(VpnConfiguration config) {
     Builder builder = new Builder();
     builder.addAddress(VPN_ADDRESS, 32);
-    builder.addAddress(VPN_ADDRESS_V6, 128);
     builder.setSession(getString(R.string.app_name));
 
     CIDR[] routes = config.getRoutes();
+    // IPv6 is opt-in: only set it up when an IPv6 route was explicitly
+    // requested, otherwise IPv6 traffic must not be captured.
+    boolean ipv6 = hasIpv6Route(routes);
+    if (ipv6) {
+      builder.addAddress(VPN_ADDRESS_V6, 128);
+    }
     if (routes.length == 0) {
-      // no routes defined, redirect the whole network traffic (dual-stack)
+      // no routes defined (legacy start): redirect IPv4 traffic only
       builder.addRoute("0.0.0.0", 0);
-      builder.addRoute("::", 0);
     } else {
       for (CIDR route : routes) {
         builder.addRoute(route.getAddress(), route.getPrefixLength());
@@ -142,9 +156,11 @@ public class GnirehtetService extends VpnService {
 
     InetAddress[] dnsServers = config.getDnsServers();
     if (dnsServers.length == 0) {
-      // no DNS server defined, use Google DNS (dual-stack)
+      // no DNS server defined, use Google DNS
       builder.addDnsServer("8.8.8.8");
-      builder.addDnsServer("2001:4860:4860::8888");
+      if (ipv6) {
+        builder.addDnsServer("2001:4860:4860::8888");
+      }
     } else {
       for (InetAddress dnsServer : dnsServers) {
         builder.addDnsServer(dnsServer);

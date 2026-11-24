@@ -26,7 +26,7 @@ use std::{
 
 use crate::{
     adb_monitor::{AdbMonitor, get_adb_path},
-    cli::Command,
+    cli::{Command, enable_ipv6},
     debug, error, info,
 };
 
@@ -53,30 +53,50 @@ impl Command {
                 dns_servers,
                 routes,
                 port,
-            } => run(serial.as_deref(), &dns_servers, &routes, port),
+                ipv6,
+            } => run(
+                serial.as_deref(),
+                &dns_servers,
+                &enable_ipv6(&routes, ipv6),
+                port,
+            ),
             Command::Autorun {
                 dns_servers,
                 routes,
                 port,
-            } => autorun(&dns_servers, &routes, port),
+                ipv6,
+            } => autorun(&dns_servers, &enable_ipv6(&routes, ipv6), port),
             Command::Start {
                 serial,
                 dns_servers,
                 routes,
                 port,
-            } => start(serial.as_deref(), &dns_servers, &routes, port),
+                ipv6,
+            } => start(
+                serial.as_deref(),
+                &dns_servers,
+                &enable_ipv6(&routes, ipv6),
+                port,
+            ),
             Command::Autostart {
                 dns_servers,
                 routes,
                 port,
-            } => autostart(&dns_servers, &routes, port),
+                ipv6,
+            } => autostart(&dns_servers, &enable_ipv6(&routes, ipv6), port),
             Command::Stop { serial } => stop(serial.as_deref()),
             Command::Restart {
                 serial,
                 dns_servers,
                 routes,
                 port,
-            } => restart(serial.as_deref(), &dns_servers, &routes, port),
+                ipv6,
+            } => restart(
+                serial.as_deref(),
+                &dns_servers,
+                &enable_ipv6(&routes, ipv6),
+                port,
+            ),
             Command::Tunnel { serial, port } => tunnel(serial.as_deref(), port),
             Command::Relay { port } => relay(port),
         }

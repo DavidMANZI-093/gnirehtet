@@ -11,10 +11,17 @@ allows devices to use the internet connection of the computer they are plugged
 on. It does not require any _root_ access (neither on the device nor on the
 computer). It works on _GNU/Linux_, _Windows_ and _macOS_.
 
-It relays [TCP] and [UDP] over both [IPv4] and [IPv6] traffic. For IPv6, the
-device is assigned the ULA address `fd00::2` (alongside `10.0.0.2` for IPv4)
-and the relay proxies each flow to its real destination, so the device needs
-neither a global IPv6 address nor router advertisements.
+It relays [TCP] and [UDP] over [IPv4], and optionally over [IPv6]. IPv6 is
+opt-in with `-6`/`--ipv6` (or an explicit IPv6 route such as `-r ::/0`),
+because capturing IPv6 on a host without working IPv6 connectivity would
+black-hole IPv6-preferring traffic. When enabled, the device is assigned the
+ULA address `fd00::2` (alongside `10.0.0.2` for IPv4) and the relay proxies
+each flow to its real destination, so the device needs neither a global IPv6
+address nor router advertisements.
+
+Current IPv6 limitations: only ULA/NAT66 is provided (no global addressing),
+inbound IPv6 connections are not supported, and IPv6 extension headers and
+fragments are dropped safely.
 
 [TCP]: https://en.wikipedia.org/wiki/Transmission_Control_Protocol
 [UDP]: https://fr.wikipedia.org/wiki/User_Datagram_Protocol
@@ -98,6 +105,12 @@ If you want to activate reverse tethering for exactly one device, just execute:
     ./gnirehtet run
 
 Reverse tethering remains active until you press _Ctrl+C_.
+
+Add `-6` (or `--ipv6`) to also reverse tether IPv6 traffic:
+
+    ./gnirehtet run -6
+
+This requires working IPv6 connectivity on the computer.
 
 On Windows, for convenience, you can double-click on `gnirehtet-run.cmd`
 instead (it just executes `gnirehtet run`, without requiring to open a
