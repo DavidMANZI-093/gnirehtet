@@ -37,6 +37,10 @@ const ACTIVITY: &str = "d3fault.gnirehtet/.GnirehtetActivity";
 const ACTION_START: &str = "d3fault.gnirehtet.START";
 const ACTION_STOP: &str = "d3fault.gnirehtet.STOP";
 const REQUIRED_APK_VERSION_CODE: &str = env!("GNIREHTET_ANDROID_VERSION_CODE");
+// POST_NOTIFICATIONS is a runtime permission since Android 13 (API 33).
+const POST_NOTIFICATIONS_PERMISSION: &str = "android.permission.POST_NOTIFICATIONS";
+const POST_NOTIFICATION_APPOP: &str = "POST_NOTIFICATION";
+const MIN_API_POST_NOTIFICATIONS: u32 = 33;
 
 impl Command {
     pub fn execute(self) -> Result<(), ExecutionError> {
@@ -83,7 +87,8 @@ impl Command {
 
 fn install(serial: Option<&str>) -> Result<(), ExecutionError> {
     info!(target: TAG, "Installing gnirehtet client...");
-    exec_adb(serial, vec!["install".into(), "-r".into(), get_apk_path()])
+    exec_adb(serial, vec!["install".into(), "-r".into(), get_apk_path()])?;
+    grant_notifications(serial)
 }
 
 fn uninstall(serial: Option<&str>) -> Result<(), ExecutionError> {
@@ -106,6 +111,8 @@ fn start(
         install(serial)?;
         // Wait a bit after installation so that intent actions are registered.
         thread::sleep(Duration::from_millis(500));
+    } else {
+        grant_notifications(serial)?;
     }
 
     info!(target: TAG, "Starting client...");
@@ -238,6 +245,73 @@ fn exec_adb<S: Into<String>>(serial: Option<&str>, args: Vec<S>) -> Result<(), E
             Err(ProcessIoError::new(cmd, err).into())
         }
     }
+}
+
+fn grant_notifications(serial: Option<&str>) -> Result<(), ExecutionError> {
+    let api_level = get_android_api_level(serial)?;
+    if api_level < MIN_API_POST_NOTIFICATIONS {
+        debug!(
+            target: TAG,
+            "Android API {}: POST_NOTIFICATIONS not required", api_level
+        );
+        return Ok(());
+    }
+
+    info!(target: TAG, "Granting notification permission...");
+    exec_adb(
+        serial,
+        vec![
+            "shell",
+            "pm",
+            "grant",
+            PACKAGE,
+            POST_NOTIFICATIONS_PERMISSION,
+        ],
+    )?;
+    exec_adb(
+        serial,
+        vec![
+            "shell",
+            "cmd",
+            "appops",
+            "set",
+            PACKAGE,
+            POST_NOTIFICATION_APPOP,
+            "allow",
+        ],
+    )
+}
+
+fn get_android_api_level(serial: Option<&str>) -> Result<u32, ExecutionError> {
+    let args = create_adb_args(serial, vec!["shell", "getprop", "ro.build.version.sdk"]);
+    let adb = get_adb_path();
+    debug!(target: TAG, "Execute: {:?} {:?}", adb, args);
+    match process::Command::new(&adb).args(&args[..]).output() {
+        Ok(output) if output.status.success() => Ok(parse_api_level(&output.stdout)?),
+        Ok(output) => {
+            let cmd = ProcessCommand::new(adb, args);
+            Err(ProcessStatusError::new(cmd, output.status).into())
+        }
+        Err(err) => {
+            let cmd = ProcessCommand::new(adb, args);
+            Err(ProcessIoError::new(cmd, err).into())
+        }
+    }
+}
+
+fn parse_api_level(output: &[u8]) -> io::Result<u32> {
+    let value = std::str::from_utf8(output).map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "Android API level is not valid UTF-8",
+        )
+    })?;
+    value.trim().parse::<u32>().map_err(|_| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("Invalid Android API level: {:?}", value.trim()),
+        )
+    })
 }
 
 fn create_adb_args<S: Into<String>>(serial: Option<&str>, args: Vec<S>) -> Vec<String> {
@@ -444,5 +518,30 @@ impl Termination {
             #[cfg(not(unix))]
             None => panic!("Unexpected signal termination on non-unix system"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_api_level_accepts_crlf() {
+        assert_eq!(parse_api_level(b"33\r\n").unwrap(), 33);
+    }
+
+    #[test]
+    fn parse_api_level_rejects_empty_output() {
+        assert!(parse_api_level(b"\r\n").is_err());
+    }
+
+    #[test]
+    fn parse_api_level_rejects_non_numeric_output() {
+        assert!(parse_api_level(b"not-a-number\n").is_err());
+    }
+
+    #[test]
+    fn parse_api_level_rejects_invalid_utf8() {
+        assert!(parse_api_level(b"\xff").is_err());
     }
 }

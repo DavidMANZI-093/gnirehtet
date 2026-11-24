@@ -18,8 +18,6 @@
 use super::binary;
 use super::byte_buffer::ByteBuffer;
 use super::ip_packet::{IpPacket, MAX_IP_PACKET_LENGTH, peek_version_length};
-use super::ipv4_packet::Ipv4Packet;
-use super::ipv6_packet::Ipv6Packet;
 
 use crate::trace;
 use std::io;
@@ -70,11 +68,7 @@ impl IpPacketBuffer {
     pub fn as_ip_packet(&mut self) -> Option<IpPacket<'_>> {
         if self.available_packet_length().is_some() {
             let data = self.buf.peek_mut();
-            match data[0] >> 4 {
-                4 => Some(IpPacket::V4(Ipv4Packet::parse(data))),
-                6 => Some(IpPacket::V6(Ipv6Packet::parse(data))),
-                _ => None,
-            }
+            IpPacket::parse(data)
         } else {
             None
         }

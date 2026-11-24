@@ -1,6 +1,6 @@
 [package]
 name = "gnirehtet"
-version = "2.6.0"
+version = "2.6.3"
 authors = [
   "Romain Vimont <rom@rom1v.com>",
   "David MANZI <manzidavid093@gmail.com>",  # simply active maintainer
@@ -12,7 +12,7 @@ edition = "2024"
 atomic_enum = { version = "0.3.0", default-features = false }
 
 # for formatting timestamp in logs
-chrono = { version = "0.4.45", default-features = false, features = ["clock"] } 
+jiff = { version = "1.0.2", default-features = false, features = ["std", "tz-system", "tzdb-bundle-platform"] }
 
 # for command-line parsing
 clap = { version = "4.6.7", default-features = false, features = ["derive", "std", "help", "usage", "error-context", "suggestions", "wrap_help"] } 

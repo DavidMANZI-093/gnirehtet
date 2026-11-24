@@ -18,7 +18,7 @@
 use std::{fmt, sync::atomic::Ordering};
 
 use atomic_enum::atomic_enum;
-use chrono::Local;
+use jiff::ZonedDateTime;
 
 static THRESHOLD: AtomicLevelFilter = AtomicLevelFilter::new(LevelFilter::Info);
 
@@ -57,8 +57,8 @@ impl fmt::Display for LevelFilter {
 #[doc(hidden)]
 pub fn emit(level: LevelFilter, target: &str, args: std::fmt::Arguments<'_>) {
     if is_enabled(level) {
-        let date = Local::now();
-        let formatted_date = date.format("%Y-%m-%d %H:%M:%S%.3f");
+        let date = ZonedDateTime::now();
+        let formatted_date = date.strftime("%Y-%m-%d %H:%M:%S%.3f").to_string();
         let msg = format!("{} {} {}: {}", formatted_date, level, target, args);
         if level == LevelFilter::Error {
             eprintln!("{}", msg);

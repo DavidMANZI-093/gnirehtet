@@ -27,6 +27,16 @@ pub enum IpPacket<'a> {
 }
 
 impl<'a> IpPacket<'a> {
+    /// Parse a raw packet, dispatching on its IP version.
+    pub fn parse(raw: &'a mut [u8]) -> Option<Self> {
+        let version = raw.first().map(|b| b >> 4)?;
+        match version {
+            4 => Ipv4Packet::parse(raw).map(IpPacket::V4),
+            6 => Some(IpPacket::V6(Ipv6Packet::parse(raw))),
+            _ => None,
+        }
+    }
+
     #[inline]
     pub fn raw(&self) -> &[u8] {
         match *self {
@@ -40,6 +50,14 @@ impl<'a> IpPacket<'a> {
         match *self {
             IpPacket::V4(ref p) => p.length(),
             IpPacket::V6(ref p) => p.length(),
+        }
+    }
+
+    #[inline]
+    pub fn payload(&self) -> Option<&[u8]> {
+        match *self {
+            IpPacket::V4(ref p) => p.payload(),
+            IpPacket::V6(ref p) => p.payload(),
         }
     }
 

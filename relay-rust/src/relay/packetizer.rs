@@ -129,14 +129,6 @@ impl Packetizer {
         ipv4_packet.compute_checksums();
         ipv4_packet
     }
-
-    pub fn inflate(&mut self, packet_length: u16) -> Ipv4Packet<'_> {
-        Ipv4Packet::new(
-            &mut self.buffer[..packet_length as usize],
-            self.ipv4_header_data.clone(),
-            self.transport_header_data.clone(),
-        )
-    }
 }
 
 /// Packetizer for IPv6 responses (no IP header checksum, payload length field).
@@ -232,14 +224,6 @@ impl Ipv6Packetizer {
         packet.compute_checksums();
         packet
     }
-
-    pub fn inflate(&mut self, packet_length: u16) -> Ipv6Packet<'_> {
-        Ipv6Packet::new(
-            &mut self.buffer[..packet_length as usize],
-            self.ipv6_header_data.clone(),
-            self.transport_header_data.clone(),
-        )
-    }
 }
 
 /// Version-agnostic packetizer used by TCP/UDP connections.
@@ -308,13 +292,6 @@ impl AnyPacketizer {
             }
         }
     }
-
-    pub fn inflate(&mut self, packet_length: u16) -> IpPacket<'_> {
-        match *self {
-            AnyPacketizer::V4(ref mut p) => IpPacket::V4(p.inflate(packet_length)),
-            AnyPacketizer::V6(ref mut p) => IpPacket::V6(p.inflate(packet_length)),
-        }
-    }
 }
 
 #[cfg(test)]
@@ -347,7 +324,7 @@ mod tests {
     #[test]
     fn merge_headers_and_payload() {
         let raw = &mut create_packet()[..];
-        let reference_packet = Ipv4Packet::parse(raw);
+        let reference_packet = Ipv4Packet::parse(raw).unwrap();
 
         let data = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let mut mock = MockDatagramSocket::from_data(&data);
@@ -362,27 +339,9 @@ mod tests {
     }
 
     #[test]
-    fn last_packet() {
-        let raw = &mut create_packet()[..];
-        let reference_packet = Ipv4Packet::parse(raw);
-
-        let data = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
-        let mut mock = MockDatagramSocket::from_data(&data);
-
-        let ipv4_header = reference_packet.ipv4_header();
-        let transport_header = reference_packet.transport_header().unwrap();
-        let mut packetizer = Packetizer::new(&ipv4_header, &transport_header);
-
-        let packet_length = packetizer.packetize(&mut mock).unwrap().length();
-        let packet = packetizer.inflate(packet_length);
-        assert_eq!(36, packet.ipv4_header_data().total_length());
-        assert_eq!(data, &packet.raw()[28..36]);
-    }
-
-    #[test]
     fn packetize_chunks() {
         let raw = &mut create_packet()[..];
-        let reference_packet = Ipv4Packet::parse(raw);
+        let reference_packet = Ipv4Packet::parse(raw).unwrap();
 
         let data = [0x11u8, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88];
         let mut cursor = io::Cursor::new(&data);
