@@ -37,7 +37,7 @@ public class Forwarder {
   private static final String TAG = Forwarder.class.getSimpleName();
 
   // +1 margin: a single read/write may carry one full packet plus a partial one
-  private static final int BUFSIZE = IPPacketOutputStream.MAX_IP_PACKET_LENGTH + 1;
+  private static final int BUFSIZE = IPPacketOutputStream.MAX_IP_PACKET_LENGTH;
 
   private static final byte[] DUMMY_ADDRESS = {42, 42, 42, 42};
   private static final int DUMMY_PORT = 4242;
